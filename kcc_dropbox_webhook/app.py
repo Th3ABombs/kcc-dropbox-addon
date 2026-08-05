@@ -14,9 +14,34 @@ OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/share/kcc-output")
 WATCH_ROOT = os.environ.get("WATCH_ROOT", "/share/suwayomi/downloads/mangas")
 DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN", "")
 DROPBOX_FOLDER = os.environ.get("DROPBOX_FOLDER", "/Applicazioni/Kobo Cloud Sync")
-PROFILE = os.environ.get("PROFILE", "KA")
-FORMAT = os.environ.get("FORMAT", "EPUB")
+KOBO_DEVICE = os.environ.get("KOBO_DEVICE", "Kobo Libra Colour")
+FORMAT = os.environ.get("FORMAT", "KEPUB")
 MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
+
+KOBO_PROFILE_MAP = {
+    "Kobo Mini": "KoMT",
+    "Kobo Touch": "KoMT",
+    "Kobo Glo": "KoG",
+    "Kobo Glo HD": "KoGHD",
+    "Kobo Aura": "KoA",
+    "Kobo Aura HD": "KoAHD",
+    "Kobo Aura H2O": "KoAH2O",
+    "Kobo Aura ONE": "KoAO",
+    "Kobo Nia": "KoN",
+    "Kobo Clara HD": "KoC",
+    "Kobo Clara 2E": "KoC",
+    "Kobo Clara Colour": "KoCC",
+    "Kobo Libra H2O": "KoL",
+    "Kobo Libra 2": "KoL",
+    "Kobo Libra Colour": "KoLC",
+    "Kobo Forma": "KoF",
+    "Kobo Sage": "KoS",
+    "Kobo Elipsa": "KoE",
+}
+
+
+def get_kobo_profile(device_name: str) -> str:
+    return KOBO_PROFILE_MAP.get(device_name, "KoLC")
 
 
 def sanitize_filename(name: str) -> str:
@@ -69,7 +94,8 @@ def health():
         "output_dir": OUTPUT_DIR,
         "watch_root": WATCH_ROOT,
         "dropbox_folder": DROPBOX_FOLDER,
-        "profile": PROFILE,
+        "kobo_device": KOBO_DEVICE,
+        "kobo_profile": get_kobo_profile(KOBO_DEVICE),
         "format": FORMAT,
         "manga_mode": MANGA_MODE,
         "dropbox_configured": bool(DROPBOX_TOKEN),
@@ -103,10 +129,11 @@ def convert():
     output_path.mkdir(parents=True, exist_ok=True)
 
     before_files = set(output_path.glob("*"))
+    kobo_profile = get_kobo_profile(KOBO_DEVICE)
 
     cmd = [
         "kcc-c2e",
-        "-p", PROFILE,
+        "-p", kobo_profile,
         "-f", FORMAT,
         "-o", OUTPUT_DIR,
         "-t", title,
@@ -147,7 +174,10 @@ def convert():
         "local_output": str(final_local),
         "dropbox_path": remote_path,
         "manga": manga_name,
-        "chapter": chapter
+        "chapter": chapter,
+        "kobo_device": KOBO_DEVICE,
+        "kobo_profile": kobo_profile,
+        "format": FORMAT
     })
 
 
