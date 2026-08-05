@@ -7,8 +7,8 @@ OUTPUT_DIR="$(jq -r '.output_dir // "/share/kcc-output"' "${OPTIONS_FILE}")"
 WATCH_ROOT="$(jq -r '.watch_root // "/share/suwayomi/downloads/mangas"' "${OPTIONS_FILE}")"
 DROPBOX_TOKEN="$(jq -r '.dropbox_token // ""' "${OPTIONS_FILE}")"
 DROPBOX_FOLDER="$(jq -r '.dropbox_folder // "/Applicazioni/Kobo Cloud Sync"' "${OPTIONS_FILE}")"
-PROFILE="$(jq -r '.profile // "KA"' "${OPTIONS_FILE}")"
-FORMAT="$(jq -r '.format // "EPUB"' "${OPTIONS_FILE}")"
+KOBO_DEVICE="$(jq -r '.kobo_device // "Kobo Libra Colour"' "${OPTIONS_FILE}")"
+FORMAT="$(jq -r '.format // "KEPUB"' "${OPTIONS_FILE}")"
 MANGA_MODE="$(jq -r '.manga_mode // true' "${OPTIONS_FILE}")"
 
 mkdir -p "${OUTPUT_DIR}"
@@ -17,7 +17,7 @@ export OUTPUT_DIR
 export WATCH_ROOT
 export DROPBOX_TOKEN
 export DROPBOX_FOLDER
-export PROFILE
+export KOBO_DEVICE
 export FORMAT
 export MANGA_MODE
 
