@@ -115,8 +115,9 @@ def convert():
     if not input_path.exists():
         return jsonify({"status": "error", "message": "file not found"}), 400
 
+    watch_root_path = Path(WATCH_ROOT)
     try:
-        input_path.relative_to(WATCH_ROOT)
+        input_path.resolve().relative_to(watch_root_path.resolve())
     except ValueError:
         return jsonify({"status": "error", "message": "file outside watch_root"}), 400
 
@@ -132,7 +133,8 @@ def convert():
     kobo_profile = get_kobo_profile(KOBO_DEVICE)
 
     cmd = [
-        "kcc-c2e",
+        "python3",
+        "/opt/kcc/kcc-c2e.py",
         "-p", kobo_profile,
         "-f", FORMAT,
         "-o", OUTPUT_DIR,
@@ -144,7 +146,23 @@ def convert():
 
     cmd.append(str(input_path))
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        return jsonify({
+            "status": "error",
+            "message": "kcc conversion failed",
+            "returncode": exc.returncode,
+            "stdout": exc.stdout,
+            "stderr": exc.stderr,
+            "command": cmd,
+        }), 500
+    except FileNotFoundError as exc:
+        return jsonify({
+            "status": "error",
+            "message": f"required executable not found: {exc.filename}",
+            "command": cmd,
+        }), 500
 
     after_files = set(output_path.glob("*"))
     generated = find_generated_file(before_files, after_files)
@@ -166,7 +184,15 @@ def convert():
             final_local.unlink()
         shutil.move(str(generated), str(final_local))
 
-    remote_path = upload_to_dropbox(final_local, final_name)
+    try:
+        remote_path = upload_to_dropbox(final_local, final_name)
+    except Exception as exc:
+        return jsonify({
+            "status": "error",
+            "message": "dropbox upload failed",
+            "error": str(exc),
+            "local_output": str(final_local),
+        }), 500
 
     return jsonify({
         "status": "ok",
