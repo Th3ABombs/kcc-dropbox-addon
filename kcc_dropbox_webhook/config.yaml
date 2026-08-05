@@ -1,0 +1,40 @@
+name: "KCC Dropbox Webhook"
+version: "1.0.0"
+slug: "kcc_dropbox_webhook"
+description: "Convert new Suwayomi chapters with KCC and upload them to Dropbox for Kobo Cloud Sync"
+url: "https://github.com/TUO_USER/kcc-dropbox-addon/tree/main/kcc_dropbox_webhook"
+startup: services
+boot: auto
+init: false
+panel_icon: mdi:book-sync
+
+arch:
+  - amd64
+  - aarch64
+
+map:
+  - type: share
+    read_only: false
+
+ports:
+  5005/tcp: 5005
+ports_description:
+  5005/tcp: "KCC webhook API"
+
+options:
+  output_dir: "/share/kcc-output"
+  watch_root: "/share/suwayomi/downloads/mangas"
+  dropbox_token: ""
+  dropbox_folder: "/Applicazioni/Kobo Cloud Sync"
+  profile: "KA"
+  format: "EPUB"
+  manga_mode: true
+
+schema:
+  output_dir: str
+  watch_root: str
+  dropbox_token: password
+  dropbox_folder: str
+  profile: str
+  format: str
+  manga_mode: bool
