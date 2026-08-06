@@ -1,9 +1,9 @@
 name: "KCC Dropbox Webhook"
-version: "1.0.3"
+version: "1.1.0"
 slug: "kcc_dropbox_webhook"
-description: "Convert new Suwayomi chapters with KCC and upload them to Dropbox for Kobo Cloud Sync"
-url: "https://github.com/TUO_USER/kcc-dropbox-addon/tree/main/kcc_dropbox_webhook"
-startup: services
+description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
+url: "https://github.com/Th3ABombs/suwayomi-addon/tree/main/kcc_dropbox_webhook"
+startup: application
 boot: auto
 init: false
 panel_icon: mdi:book-sync
@@ -19,22 +19,36 @@ map:
 ports:
   5005/tcp: 5005
 ports_description:
-  5005/tcp: "KCC webhook API"
+  5005/tcp: "KCC Dropbox Webhook"
+
+webui: "http://[HOST]:[PORT:5005]/health"
 
 options:
   output_dir: "/share/kcc-output"
   watch_root: "/share/suwayomi/downloads/mangas"
-  dropbox_token: ""
   dropbox_folder: "/Applicazioni/Kobo Cloud Sync"
+  dropbox_app_key: ""
+  dropbox_app_secret: ""
+  dropbox_refresh_token: ""
   kobo_device: "Kobo Libra Colour"
   format: "KEPUB"
   manga_mode: true
+  file_stable_timeout: 180
+  file_stable_for: 5
+  file_stable_interval: 1
+  kcc_timeout: 1800
 
 schema:
   output_dir: str
   watch_root: str
-  dropbox_token: password
   dropbox_folder: str
-  kobo_device: list(Kobo Mini|Kobo Touch|Kobo Glo|Kobo Glo HD|Kobo Aura|Kobo Aura HD|Kobo Aura H2O|Kobo Aura ONE|Kobo Nia|Kobo Clara HD|Kobo Clara 2E|Kobo Clara Colour|Kobo Libra H2O|Kobo Libra 2|Kobo Libra Colour|Kobo Forma|Kobo Sage|Kobo Elipsa)
-  format: list(EPUB|KEPUB|CBZ|PDF)
+  dropbox_app_key: password
+  dropbox_app_secret: password
+  dropbox_refresh_token: password
+  kobo_device: str
+  format: list(EPUB|KEPUB|CBZ)
   manga_mode: bool
+  file_stable_timeout: int(10,3600)
+  file_stable_for: int(1,120)
+  file_stable_interval: int(1,30)
+  kcc_timeout: int(30,7200)
