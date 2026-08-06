@@ -19,8 +19,10 @@ logging.basicConfig(
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/share/kcc-output")
 WATCH_ROOT = os.environ.get("WATCH_ROOT", "/share/suwayomi/downloads/mangas")
-DROPBOX_TOKEN = os.environ.get("DROPBOX_TOKEN", "")
 DROPBOX_FOLDER = os.environ.get("DROPBOX_FOLDER", "/Applicazioni/Kobo Cloud Sync")
+DROPBOX_APP_KEY = os.environ.get("DROPBOX_APP_KEY", "")
+DROPBOX_APP_SECRET = os.environ.get("DROPBOX_APP_SECRET", "")
+DROPBOX_REFRESH_TOKEN = os.environ.get("DROPBOX_REFRESH_TOKEN", "")
 KOBO_DEVICE = os.environ.get("KOBO_DEVICE", "Kobo Libra Colour")
 FORMAT = os.environ.get("FORMAT", "KEPUB")
 MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
@@ -85,11 +87,19 @@ def find_generated_file(before_files, after_files):
     return None
 
 
-def upload_to_dropbox(local_file: Path, remote_filename: str):
-    if not DROPBOX_TOKEN:
-        raise RuntimeError("Dropbox token not configured")
+def get_dropbox_client():
+    if not DROPBOX_APP_KEY or not DROPBOX_APP_SECRET or not DROPBOX_REFRESH_TOKEN:
+        raise RuntimeError("Dropbox app key, app secret, or refresh token not configured")
 
-    dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+    return dropbox.Dropbox(
+        app_key=DROPBOX_APP_KEY,
+        app_secret=DROPBOX_APP_SECRET,
+        oauth2_refresh_token=DROPBOX_REFRESH_TOKEN
+    )
+
+
+def upload_to_dropbox(local_file: Path, remote_filename: str):
+    dbx = get_dropbox_client()
     remote_path = f"{DROPBOX_FOLDER.rstrip('/')}/{remote_filename}"
 
     app.logger.info("Uploading to Dropbox: %s -> %s", local_file, remote_path)
@@ -173,11 +183,13 @@ def health():
         "output_dir": OUTPUT_DIR,
         "watch_root": WATCH_ROOT,
         "dropbox_folder": DROPBOX_FOLDER,
+        "dropbox_app_key_configured": bool(DROPBOX_APP_KEY),
+        "dropbox_app_secret_configured": bool(DROPBOX_APP_SECRET),
+        "dropbox_refresh_token_configured": bool(DROPBOX_REFRESH_TOKEN),
         "kobo_device": KOBO_DEVICE,
         "kobo_profile": get_kobo_profile(KOBO_DEVICE),
         "format": FORMAT,
         "manga_mode": MANGA_MODE,
-        "dropbox_configured": bool(DROPBOX_TOKEN),
         "kcc_timeout": KCC_TIMEOUT,
         "file_stable_timeout": FILE_STABLE_TIMEOUT,
         "file_stable_for": FILE_STABLE_FOR,
