@@ -33,6 +33,7 @@ DROPBOX_REFRESH_TOKEN = os.environ.get("DROPBOX_REFRESH_TOKEN", "")
 KOBO_DEVICE = os.environ.get("KOBO_DEVICE", "Kobo Libra Colour")
 FORMAT = os.environ.get("FORMAT", "KEPUB")
 MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
+FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 
 KCC_TIMEOUT = int(os.environ.get("KCC_TIMEOUT", "1800"))
 FILE_STABLE_TIMEOUT = int(os.environ.get("FILE_STABLE_TIMEOUT", "180"))
@@ -74,7 +75,6 @@ SPECIAL_CHAPTER_LABELS = [
     "sidestory",
     "interlude",
 ]
-
 
 task_queue = queue.Queue()
 jobs = {}
@@ -213,8 +213,8 @@ def add_series_metadata_to_book(book_path: Path, series_name: str, series_index:
         return
 
     app.logger.info(
-        "Injecting series metadata into %s: series=%s index=%s",
-        book_path, series_name, series_index
+        "Injecting metadata into %s: series=%s index=%s force_creator_to_series=%s",
+        book_path, series_name, series_index, FORCE_CREATOR_TO_SERIES
     )
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -260,6 +260,10 @@ def add_series_metadata_to_book(book_path: Path, series_name: str, series_index:
         if metadata is None:
             raise RuntimeError(f"metadata section not found in OPF: {opf_path}")
 
+        if FORCE_CREATOR_TO_SERIES:
+            for creator in list(metadata.findall("dc:creator", ns)):
+                metadata.remove(creator)
+
         for meta in list(metadata.findall("opf:meta", ns)):
             prop = meta.attrib.get("property")
             name = meta.attrib.get("name")
@@ -273,9 +277,29 @@ def add_series_metadata_to_book(book_path: Path, series_name: str, series_index:
                 metadata.remove(meta)
                 continue
 
+            if FORCE_CREATOR_TO_SERIES and refines == "#creator":
+                metadata.remove(meta)
+                continue
+
             if name in {"calibre:series", "calibre:series_index"}:
                 metadata.remove(meta)
                 continue
+
+        if FORCE_CREATOR_TO_SERIES:
+            creator = ET.SubElement(metadata, "{http://purl.org/dc/elements/1.1/}creator")
+            creator.set("id", "creator")
+            creator.text = series_name
+
+            creator_role = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+            creator_role.set("refines", "#creator")
+            creator_role.set("property", "role")
+            creator_role.set("scheme", "marc:relators")
+            creator_role.text = "aut"
+
+            creator_file_as = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+            creator_file_as.set("refines", "#creator")
+            creator_file_as.set("property", "file-as")
+            creator_file_as.text = series_name
 
         meta_collection = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
         meta_collection.set("id", "series")
@@ -539,6 +563,8 @@ def process_file(input_path: Path):
         "chapter": chapter,
         "series": series_name,
         "series_index": format_series_index(series_index) if series_index is not None else None,
+        "creator_forced_to": series_name if FORCE_CREATOR_TO_SERIES else None,
+        "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
         "kobo_device": KOBO_DEVICE,
         "kobo_profile": kobo_profile,
         "format": FORMAT,
@@ -640,6 +666,7 @@ def health():
         "kobo_profile": get_kobo_profile(KOBO_DEVICE),
         "format": FORMAT,
         "manga_mode": MANGA_MODE,
+        "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
         "kcc_timeout": KCC_TIMEOUT,
         "file_stable_timeout": FILE_STABLE_TIMEOUT,
         "file_stable_for": FILE_STABLE_FOR,

@@ -12,6 +12,7 @@ DROPBOX_REFRESH_TOKEN=""
 KOBO_DEVICE="Kobo Libra Colour"
 FORMAT="KEPUB"
 MANGA_MODE="true"
+FORCE_CREATOR_TO_SERIES="false"
 FILE_STABLE_TIMEOUT="180"
 FILE_STABLE_FOR="5"
 FILE_STABLE_INTERVAL="1"
@@ -27,6 +28,7 @@ if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   KOBO_DEVICE="$(jq -r '.kobo_device // "Kobo Libra Colour"' "${OPTIONS_FILE}")"
   FORMAT="$(jq -r '.format // "KEPUB"' "${OPTIONS_FILE}")"
   MANGA_MODE="$(jq -r '.manga_mode // true' "${OPTIONS_FILE}")"
+  FORCE_CREATOR_TO_SERIES="$(jq -r '.force_creator_to_series // false' "${OPTIONS_FILE}")"
   FILE_STABLE_TIMEOUT="$(jq -r '.file_stable_timeout // 180' "${OPTIONS_FILE}")"
   FILE_STABLE_FOR="$(jq -r '.file_stable_for // 5' "${OPTIONS_FILE}")"
   FILE_STABLE_INTERVAL="$(jq -r '.file_stable_interval // 1' "${OPTIONS_FILE}")"
@@ -42,6 +44,7 @@ export DROPBOX_REFRESH_TOKEN
 export KOBO_DEVICE
 export FORMAT
 export MANGA_MODE
+export FORCE_CREATOR_TO_SERIES
 export FILE_STABLE_TIMEOUT
 export FILE_STABLE_FOR
 export FILE_STABLE_INTERVAL

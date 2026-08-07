@@ -1,5 +1,5 @@
 name: "KCC Dropbox Webhook"
-version: "2.0.3"
+version: "2.0.4"
 slug: "kcc_dropbox_webhook"
 description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
 url: "https://github.com/Th3ABombs/suwayomi-addon/tree/main/kcc_dropbox_webhook"
@@ -33,6 +33,7 @@ options:
   kobo_device: "Kobo Libra Colour"
   format: "KEPUB"
   manga_mode: true
+  force_creator_to_series: false
   file_stable_timeout: 180
   file_stable_for: 5
   file_stable_interval: 1
@@ -48,6 +49,7 @@ schema:
   kobo_device: list(Kobo Libra Colour|Kobo Clara Colour|Kobo Clara BW|Kobo Elipsa 2E|Kobo Clara 2E|Kobo Sage|Kobo Libra 2|Kobo Elipsa|Kobo Nia|Kobo Libra H2O|Kobo Forma|Kobo Clara HD|Kobo Aura H2O Edition 2|Kobo Aura ONE|Kobo Aura Edition 2|Kobo Aura|Kobo Touch 2.0|Kobo Glo HD|Kobo Aura H2O|Kobo Aura HD|Kobo Glo|Kobo Touch)
   format: list(EPUB|KEPUB|CBZ)
   manga_mode: bool
+  force_creator_to_series: bool
   file_stable_timeout: int(10,3600)
   file_stable_for: int(1,120)
   file_stable_interval: int(1,30)
