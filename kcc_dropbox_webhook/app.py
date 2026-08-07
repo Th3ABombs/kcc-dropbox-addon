@@ -4,7 +4,11 @@ import shutil
 import subprocess
 import time
 import logging
+import threading
+import queue
+import uuid
 from pathlib import Path
+from typing import Optional
 
 import dropbox
 from dropbox.files import WriteMode
@@ -52,6 +56,10 @@ KOBO_PROFILE_MAP = {
     "Kobo Sage": "KoS",
     "Kobo Elipsa": "KoE",
 }
+
+task_queue = queue.Queue()
+jobs = {}
+jobs_lock = threading.Lock()
 
 
 def get_kobo_profile(device_name: str) -> str:
@@ -176,8 +184,216 @@ def run_kcc(cmd, timeout):
     )
 
 
+def utc_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def serialize_job(job):
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "file_path": job["file_path"],
+        "created_at": job["created_at"],
+        "started_at": job.get("started_at"),
+        "finished_at": job.get("finished_at"),
+        "result": job.get("result"),
+        "error": job.get("error"),
+    }
+
+
+def count_jobs_by_status():
+    with jobs_lock:
+        counts = {
+            "queued": 0,
+            "processing": 0,
+            "done": 0,
+            "error": 0,
+        }
+        for job in jobs.values():
+            status = job["status"]
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+
+def find_existing_job_for_file(file_path: str) -> Optional[dict]:
+    with jobs_lock:
+        for job in jobs.values():
+            if job["file_path"] == file_path and job["status"] in ("queued", "processing"):
+                return serialize_job(job)
+    return None
+
+
+def set_job_status(job_id, status, **extra):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return
+        job["status"] = status
+        job.update(extra)
+
+
+def process_file(input_path: Path):
+    watch_root_path = Path(WATCH_ROOT)
+    try:
+        input_path.resolve().relative_to(watch_root_path.resolve())
+    except ValueError:
+        raise RuntimeError(f"file outside watch_root: {input_path}")
+
+    stable_size = wait_for_file_stable(
+        input_path,
+        timeout=FILE_STABLE_TIMEOUT,
+        stable_for=FILE_STABLE_FOR,
+        interval=FILE_STABLE_INTERVAL
+    )
+
+    manga_name, chapter = extract_chapter_info(input_path)
+    safe_manga = sanitize_filename(manga_name)
+    safe_chapter = sanitize_filename(chapter)
+    title = f"{safe_manga} {safe_chapter}"
+
+    output_path = Path(OUTPUT_DIR)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    before_files = set(output_path.glob("*"))
+    kobo_profile = get_kobo_profile(KOBO_DEVICE)
+
+    cmd = [
+        "python3",
+        "/opt/kcc/kcc-c2e.py",
+        "-p", kobo_profile,
+        "-f", FORMAT,
+        "-o", OUTPUT_DIR,
+        "-t", title,
+    ]
+
+    if MANGA_MODE:
+        cmd.append("-m")
+
+    cmd.append(str(input_path))
+
+    result = run_kcc(cmd, timeout=KCC_TIMEOUT)
+    app.logger.info("KCC stdout: %s", result.stdout.strip())
+    if result.stderr.strip():
+        app.logger.info("KCC stderr: %s", result.stderr.strip())
+
+    after_files = set(output_path.glob("*"))
+    generated = find_generated_file(before_files, after_files)
+
+    if generated is None:
+        candidates = sorted(output_path.glob(f"*{safe_chapter}*"))
+        if candidates:
+            generated = candidates[-1]
+
+    if generated is None or not generated.exists():
+        raise RuntimeError("converted file not found")
+
+    extension = "".join(generated.suffixes) if generated.suffixes else f".{FORMAT.lower()}"
+    final_name = f"{title}{extension}"
+    final_local = output_path / final_name
+
+    if generated != final_local:
+        if final_local.exists():
+            final_local.unlink()
+        shutil.move(str(generated), str(final_local))
+
+    remote_path = upload_to_dropbox(final_local, final_name)
+
+    return {
+        "input_file": str(input_path),
+        "stable_size": stable_size,
+        "local_output": str(final_local),
+        "dropbox_path": remote_path,
+        "manga": manga_name,
+        "chapter": chapter,
+        "kobo_device": KOBO_DEVICE,
+        "kobo_profile": kobo_profile,
+        "format": FORMAT,
+    }
+
+
+def worker():
+    app.logger.info("Background worker started")
+    while True:
+        job_id = task_queue.get()
+        try:
+            with jobs_lock:
+                job = jobs.get(job_id)
+
+            if not job:
+                app.logger.warning("Job not found in registry: %s", job_id)
+                continue
+
+            input_path = Path(job["file_path"])
+            set_job_status(job_id, "processing", started_at=utc_now(), error=None)
+
+            app.logger.info("Processing job %s for %s", job_id, input_path)
+            result = process_file(input_path)
+
+            set_job_status(
+                job_id,
+                "done",
+                finished_at=utc_now(),
+                result=result,
+                error=None
+            )
+            app.logger.info("Job %s completed", job_id)
+
+        except subprocess.TimeoutExpired as exc:
+            app.logger.exception("KCC timed out for job %s", job_id)
+            set_job_status(
+                job_id,
+                "error",
+                finished_at=utc_now(),
+                error={
+                    "message": f"kcc conversion timed out after {KCC_TIMEOUT}s",
+                    "stdout": exc.stdout,
+                    "stderr": exc.stderr,
+                }
+            )
+        except subprocess.CalledProcessError as exc:
+            app.logger.exception("KCC failed for job %s", job_id)
+            set_job_status(
+                job_id,
+                "error",
+                finished_at=utc_now(),
+                error={
+                    "message": "kcc conversion failed",
+                    "returncode": exc.returncode,
+                    "stdout": exc.stdout,
+                    "stderr": exc.stderr,
+                }
+            )
+        except FileNotFoundError as exc:
+            app.logger.exception("Executable not found for job %s", job_id)
+            set_job_status(
+                job_id,
+                "error",
+                finished_at=utc_now(),
+                error={
+                    "message": f"required executable not found: {exc.filename}",
+                }
+            )
+        except Exception as exc:
+            app.logger.exception("Unexpected worker error for job %s", job_id)
+            set_job_status(
+                job_id,
+                "error",
+                finished_at=utc_now(),
+                error={
+                    "message": str(exc),
+                }
+            )
+        finally:
+            task_queue.task_done()
+
+
+worker_thread = threading.Thread(target=worker, daemon=True)
+worker_thread.start()
+
+
 @app.route("/health", methods=["GET"])
 def health():
+    queue_counts = count_jobs_by_status()
     status = {
         "status": "running",
         "output_dir": OUTPUT_DIR,
@@ -194,8 +410,40 @@ def health():
         "file_stable_timeout": FILE_STABLE_TIMEOUT,
         "file_stable_for": FILE_STABLE_FOR,
         "file_stable_interval": FILE_STABLE_INTERVAL,
+        "queue_size": task_queue.qsize(),
+        "jobs": queue_counts,
+        "worker_alive": worker_thread.is_alive(),
     }
     return jsonify(status)
+
+
+@app.route("/queue", methods=["GET"])
+def queue_status():
+    with jobs_lock:
+        queued_jobs = [serialize_job(job) for job in jobs.values() if job["status"] == "queued"]
+        processing_jobs = [serialize_job(job) for job in jobs.values() if job["status"] == "processing"]
+
+    return jsonify({
+        "queue_size": task_queue.qsize(),
+        "queued_jobs": queued_jobs,
+        "processing_jobs": processing_jobs,
+        "worker_alive": worker_thread.is_alive(),
+    })
+
+
+@app.route("/jobs/<job_id>", methods=["GET"])
+def get_job(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+
+    if not job:
+        return jsonify({
+            "status": "error",
+            "message": "job not found",
+            "job_id": job_id
+        }), 404
+
+    return jsonify(serialize_job(job))
 
 
 @app.route("/convert", methods=["POST"])
@@ -237,156 +485,54 @@ def convert():
             "input_file": str(input_path)
         }), 400
 
-    watch_root_path = Path(WATCH_ROOT)
-    try:
-        input_path.resolve().relative_to(watch_root_path.resolve())
-    except ValueError:
-        app.logger.warning("File outside watch_root: %s", input_path)
+    existing_job = find_existing_job_for_file(str(input_path))
+    if existing_job:
         return jsonify({
-            "status": "error",
-            "message": "file outside watch_root",
-            "input_file": str(input_path),
-            "watch_root": str(watch_root_path)
-        }), 400
+            "status": "already_queued",
+            "message": "file already queued or processing",
+            "job": existing_job,
+            "queue_size": task_queue.qsize(),
+        }), 202
 
-    try:
-        stable_size = wait_for_file_stable(
-            input_path,
-            timeout=FILE_STABLE_TIMEOUT,
-            stable_for=FILE_STABLE_FOR,
-            interval=FILE_STABLE_INTERVAL
-        )
-    except Exception as exc:
-        app.logger.exception("File not ready for conversion: %s", input_path)
-        return jsonify({
-            "status": "error",
-            "message": "source file not ready",
-            "error": str(exc),
-            "input_file": str(input_path)
-        }), 500
-
-    manga_name, chapter = extract_chapter_info(input_path)
-    safe_manga = sanitize_filename(manga_name)
-    safe_chapter = sanitize_filename(chapter)
-    title = f"{safe_manga} {safe_chapter}"
-
-    output_path = Path(OUTPUT_DIR)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    before_files = set(output_path.glob("*"))
-    kobo_profile = get_kobo_profile(KOBO_DEVICE)
-
-    cmd = [
-        "python3",
-        "/opt/kcc/kcc-c2e.py",
-        "-p", kobo_profile,
-        "-f", FORMAT,
-        "-o", OUTPUT_DIR,
-        "-t", title,
-    ]
-
-    if MANGA_MODE:
-        cmd.append("-m")
-
-    cmd.append(str(input_path))
-
-    try:
-        result = run_kcc(cmd, timeout=KCC_TIMEOUT)
-        app.logger.info("KCC stdout: %s", result.stdout.strip())
-        if result.stderr.strip():
-            app.logger.info("KCC stderr: %s", result.stderr.strip())
-    except subprocess.TimeoutExpired as exc:
-        app.logger.exception("KCC timed out")
-        return jsonify({
-            "status": "error",
-            "message": f"kcc conversion timed out after {KCC_TIMEOUT}s",
-            "stdout": exc.stdout,
-            "stderr": exc.stderr,
-            "command": cmd,
-            "input_file": str(input_path)
-        }), 500
-    except subprocess.CalledProcessError as exc:
-        app.logger.exception("KCC conversion failed")
-        return jsonify({
-            "status": "error",
-            "message": "kcc conversion failed",
-            "returncode": exc.returncode,
-            "stdout": exc.stdout,
-            "stderr": exc.stderr,
-            "command": cmd,
-            "input_file": str(input_path),
-            "stable_size": stable_size
-        }), 500
-    except FileNotFoundError as exc:
-        app.logger.exception("Required executable not found")
-        return jsonify({
-            "status": "error",
-            "message": f"required executable not found: {exc.filename}",
-            "command": cmd
-        }), 500
-    except Exception as exc:
-        app.logger.exception("Unexpected error during KCC conversion")
-        return jsonify({
-            "status": "error",
-            "message": "unexpected conversion error",
-            "error": str(exc),
-            "command": cmd
-        }), 500
-
-    after_files = set(output_path.glob("*"))
-    generated = find_generated_file(before_files, after_files)
-
-    if generated is None:
-        candidates = sorted(output_path.glob(f"*{safe_chapter}*"))
-        if candidates:
-            generated = candidates[-1]
-
-    if generated is None or not generated.exists():
-        app.logger.error("Converted file not found after KCC execution")
-        return jsonify({
-            "status": "error",
-            "message": "converted file not found",
-            "output_dir": OUTPUT_DIR,
-            "input_file": str(input_path)
-        }), 500
-
-    extension = "".join(generated.suffixes) if generated.suffixes else f".{FORMAT.lower()}"
-    final_name = f"{title}{extension}"
-    final_local = output_path / final_name
-
-    if generated != final_local:
-        if final_local.exists():
-            final_local.unlink()
-        shutil.move(str(generated), str(final_local))
-
-    try:
-        remote_path = upload_to_dropbox(final_local, final_name)
-    except Exception as exc:
-        app.logger.exception("Dropbox upload failed")
-        return jsonify({
-            "status": "error",
-            "message": "dropbox upload failed",
-            "error": str(exc),
-            "local_output": str(final_local),
-            "input_file": str(input_path)
-        }), 500
-
-    response = {
-        "status": "ok",
-        "input_file": str(input_path),
-        "stable_size": stable_size,
-        "local_output": str(final_local),
-        "dropbox_path": remote_path,
-        "manga": manga_name,
-        "chapter": chapter,
-        "kobo_device": KOBO_DEVICE,
-        "kobo_profile": kobo_profile,
-        "format": FORMAT
+    job_id = str(uuid.uuid4())
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "file_path": str(input_path),
+        "created_at": utc_now(),
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+        "error": None,
     }
 
-    app.logger.info("Conversion completed successfully: %s", response)
-    return jsonify(response)
+    with jobs_lock:
+        jobs[job_id] = job
+
+    task_queue.put(job_id)
+
+    return jsonify({
+        "status": "queued",
+        "message": "job queued successfully",
+        "job_id": job_id,
+        "file_path": str(input_path),
+        "queue_size": task_queue.qsize(),
+        "job": serialize_job(job),
+    }), 202
+
+
+@app.route("/jobs", methods=["GET"])
+def list_jobs():
+    with jobs_lock:
+        all_jobs = [serialize_job(job) for job in jobs.values()]
+
+    all_jobs.sort(key=lambda j: j["created_at"], reverse=True)
+
+    return jsonify({
+        "count": len(all_jobs),
+        "jobs": all_jobs
+    })
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5005)
+    app.run(host="0.0.0.0", port=5005, threaded=True)
