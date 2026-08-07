@@ -45,28 +45,7 @@ schema:
   dropbox_app_key: password
   dropbox_app_secret: password
   dropbox_refresh_token: password
-  kobo_device:
-    - Kobo Libra Colour
-    - Kobo Clara Colour
-    - Kobo Clara BW
-    - Kobo Elipsa 2E
-    - Kobo Clara 2E
-    - Kobo Sage
-    - Kobo Libra 2
-    - Kobo Elipsa
-    - Kobo Nia
-    - Kobo Libra H2O
-    - Kobo Forma
-    - Kobo Clara HD
-    - Kobo Aura H2O Edition 2
-    - Kobo Aura ONE
-    - Kobo Aura Edition 2
-    - Kobo Touch 2.0
-    - Kobo Glo HD
-    - Kobo Aura H2O
-    - Kobo Aura HD
-    - Kobo Glo
-    - Kobo Touch
+  kobo_device: list(Kobo Libra Colour|Kobo Clara Colour|Kobo Clara BW|Kobo Elipsa 2E|Kobo Clara 2E|Kobo Sage|Kobo Libra 2|Kobo Elipsa|Kobo Nia|Kobo Libra H2O|Kobo Forma|Kobo Clara HD|Kobo Aura H2O Edition 2|Kobo Aura ONE|Kobo Aura Edition 2|Kobo Touch 2.0|Kobo Glo HD|Kobo Aura H2O|Kobo Aura HD|Kobo Glo|Kobo Touch)
   format: list(EPUB|KEPUB|CBZ)
   manga_mode: bool
   file_stable_timeout: int(10,3600)
