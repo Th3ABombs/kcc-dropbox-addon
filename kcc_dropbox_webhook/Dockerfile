@@ -1,16 +1,26 @@
-FROM ghcr.io/ciromattia/kcc:latest
+FROM python:3.12-slim
 
-USER root
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
 
-RUN if command -v apk >/dev/null 2>&1; then \
-      apk add --no-cache jq python3 py3-pip; \
-    elif command -v apt-get >/dev/null 2>&1; then \
-      apt-get update && apt-get install -y jq python3 python3-pip && rm -rf /var/lib/apt/lists/*; \
-    else \
-      echo "No supported package manager found"; exit 1; \
-    fi
+RUN apt-get update && apt-get install -y \
+    git \
+    jq \
+    p7zip-full \
+    libjpeg-dev \
+    libpng-dev \
+    python3-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --no-cache-dir flask dropbox
+WORKDIR /opt
+
+RUN git clone --depth 1 https://github.com/ciromattia/kcc.git /opt/kcc \
+    && python -m pip install --upgrade pip \
+    && python -m pip install --no-cache-dir -r /opt/kcc/requirements.txt \
+    && ln -s /opt/kcc/kcc-c2e.py /usr/local/bin/kcc-c2e \
+    && chmod +x /opt/kcc/kcc-c2e.py /usr/local/bin/kcc-c2e \
+    && python -m pip install --no-cache-dir flask dropbox
 
 COPY run.sh /run.sh
 COPY app.py /app.py
