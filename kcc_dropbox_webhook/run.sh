@@ -47,19 +47,4 @@ export FILE_STABLE_FOR
 export FILE_STABLE_INTERVAL
 export KCC_TIMEOUT
 
-echo "Starting KCC Dropbox Webhook with:"
-echo "OUTPUT_DIR=${OUTPUT_DIR}"
-echo "WATCH_ROOT=${WATCH_ROOT}"
-echo "DROPBOX_FOLDER=${DROPBOX_FOLDER}"
-echo "KOBO_DEVICE=${KOBO_DEVICE}"
-echo "FORMAT=${FORMAT}"
-echo "MANGA_MODE=${MANGA_MODE}"
-echo "FILE_STABLE_TIMEOUT=${FILE_STABLE_TIMEOUT}"
-echo "FILE_STABLE_FOR=${FILE_STABLE_FOR}"
-echo "FILE_STABLE_INTERVAL=${FILE_STABLE_INTERVAL}"
-echo "KCC_TIMEOUT=${KCC_TIMEOUT}"
-echo "DROPBOX_APP_KEY_SET=$( [ -n "${DROPBOX_APP_KEY}" ] && echo true || echo false )"
-echo "DROPBOX_APP_SECRET_SET=$( [ -n "${DROPBOX_APP_SECRET}" ] && echo true || echo false )"
-echo "DROPBOX_REFRESH_TOKEN_SET=$( [ -n "${DROPBOX_REFRESH_TOKEN}" ] && echo true || echo false )"
-
 exec python3 /app.py
