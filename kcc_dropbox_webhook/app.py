@@ -7,6 +7,9 @@ import logging
 import threading
 import queue
 import uuid
+import zipfile
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +60,22 @@ KOBO_PROFILE_MAP = {
     "Kobo Elipsa": "KoE",
 }
 
+SPECIAL_CHAPTER_LABELS = [
+    "extra",
+    "special",
+    "bonus",
+    "omake",
+    "oneshot",
+    "one-shot",
+    "pilot",
+    "prologue",
+    "epilogue",
+    "side story",
+    "sidestory",
+    "interlude",
+]
+
+
 task_queue = queue.Queue()
 jobs = {}
 jobs_lock = threading.Lock()
@@ -72,20 +91,76 @@ def sanitize_filename(name: str) -> str:
     return name
 
 
+def normalize_chapter_number(raw: str) -> str:
+    value = raw.strip().replace(",", ".")
+    value = re.sub(r"[^0-9.]+", "", value)
+
+    if not value:
+        return "unknown"
+
+    if value.count(".") > 1:
+        parts = [p for p in value.split(".") if p]
+        if not parts:
+            return "unknown"
+        value = parts[0] + "." + "".join(parts[1:])
+
+    if "." in value:
+        left, right = value.split(".", 1)
+        left = left.lstrip("0") or "0"
+        right = right.rstrip("0")
+        if right:
+            return f"{left}.{right}"
+        return left
+
+    return value.lstrip("0") or "0"
+
+
+def extract_special_chapter_label(base_name: str) -> Optional[str]:
+    lowered = base_name.lower()
+
+    for label in SPECIAL_CHAPTER_LABELS:
+        pattern = r"\b" + re.escape(label).replace(r"\ ", r"[\s._-]*") + r"\b"
+        if re.search(pattern, lowered, re.IGNORECASE):
+            pretty = " ".join(word.capitalize() for word in label.replace("-", " ").split())
+            return pretty
+
+    ex_match = re.search(r"\bex(?:tra)?[\s._-]*([0-9]+(?:\.[0-9]+)?)\b", lowered, re.IGNORECASE)
+    if ex_match:
+        return f"Extra {normalize_chapter_number(ex_match.group(1))}"
+
+    return None
+
+
 def extract_chapter_info(file_path: Path):
     manga_name = file_path.parent.name
     base_name = file_path.stem
+    cleaned = base_name.replace("_", " ").replace("-", " ")
 
-    ch_match = re.search(
-        r"(?:Ch\.?|Chapter\.?|Cap\.?)\s*([0-9]+(?:\.[0-9]+)?)",
-        base_name,
-        re.IGNORECASE
-    )
-    if not ch_match:
-        ch_match = re.search(r"([0-9]+(?:\.[0-9]+)?)$", base_name)
+    patterns = [
+        r"\b(?:chapter|chap|ch|capitolo|cap|episode|ep|parte|part)\.?\s*([0-9]+(?:\.[0-9]+)?)\b",
+        r"\bc\s*([0-9]+(?:\.[0-9]+)?)\b",
+        r"\bv(?:ol(?:ume)?)?\.?\s*[0-9]+\s*(?:ch|c|chapter|cap)\.?\s*([0-9]+(?:\.[0-9]+)?)\b",
+        r"\bv[0-9]+\s*c([0-9]+(?:\.[0-9]+)?)\b",
+    ]
 
-    chapter = ch_match.group(1) if ch_match else "unknown"
-    return manga_name, chapter
+    for pattern in patterns:
+        match = re.search(pattern, cleaned, re.IGNORECASE)
+        if match:
+            return manga_name, normalize_chapter_number(match.group(1))
+
+    trailing_match = re.search(r"(?:^|[\s._-])([0-9]{1,4}(?:\.[0-9]+)?)$", cleaned)
+    if trailing_match:
+        return manga_name, normalize_chapter_number(trailing_match.group(1))
+
+    standalone_numbers = re.findall(r"\b([0-9]{1,4}(?:\.[0-9]+)?)\b", cleaned)
+    if standalone_numbers:
+        return manga_name, normalize_chapter_number(standalone_numbers[-1])
+
+    special_label = extract_special_chapter_label(base_name)
+    if special_label:
+        return manga_name, special_label
+
+    return manga_name, "unknown"
 
 
 def find_generated_file(before_files, after_files):
@@ -93,6 +168,160 @@ def find_generated_file(before_files, after_files):
     if new_files:
         return new_files[-1]
     return None
+
+
+def get_series_metadata(manga_name: str, chapter: str):
+    series_name = manga_name.strip()
+
+    try:
+        series_index = float(chapter)
+    except (TypeError, ValueError):
+        series_index = None
+
+    return series_name, series_index
+
+
+def format_series_index(value: Optional[float]) -> str:
+    if value is None:
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value).rstrip("0").rstrip(".")
+
+
+def indent_xml(elem, level=0):
+    indent_value = "\n" + level * "  "
+    if len(elem):
+        if not elem.text or not elem.text.strip():
+            elem.text = indent_value + "  "
+        for child in elem:
+            indent_xml(child, level + 1)
+        if not elem[-1].tail or not elem[-1].tail.strip():
+            elem[-1].tail = indent_value
+    if level and (not elem.tail or not elem.tail.strip()):
+        elem.tail = indent_value
+
+
+def add_series_metadata_to_book(book_path: Path, series_name: str, series_index: Optional[float]):
+    book_name_lower = book_path.name.lower()
+    if not (
+        book_name_lower.endswith(".epub")
+        or book_name_lower.endswith(".kepub")
+        or book_name_lower.endswith(".kepub.epub")
+    ):
+        app.logger.info("Skipping series metadata injection for unsupported file type: %s", book_path)
+        return
+
+    app.logger.info(
+        "Injecting series metadata into %s: series=%s index=%s",
+        book_path, series_name, series_index
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        extract_dir = tmpdir_path / "book"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        with zipfile.ZipFile(book_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+        container_xml = extract_dir / "META-INF" / "container.xml"
+        if not container_xml.exists():
+            raise RuntimeError(f"container.xml not found in {book_path}")
+
+        container_tree = ET.parse(container_xml)
+        container_root = container_tree.getroot()
+        container_ns = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
+        rootfile = container_root.find(".//c:rootfile", container_ns)
+
+        if rootfile is None:
+            raise RuntimeError(f"OPF rootfile not found in {book_path}")
+
+        opf_relative_path = rootfile.attrib.get("full-path")
+        if not opf_relative_path:
+            raise RuntimeError(f"OPF path missing in container.xml for {book_path}")
+
+        opf_path = extract_dir / opf_relative_path
+        if not opf_path.exists():
+            raise RuntimeError(f"OPF file not found: {opf_path}")
+
+        ET.register_namespace("", "http://www.idpf.org/2007/opf")
+        ET.register_namespace("dc", "http://purl.org/dc/elements/1.1/")
+
+        tree = ET.parse(opf_path)
+        root = tree.getroot()
+
+        ns = {
+            "opf": "http://www.idpf.org/2007/opf",
+            "dc": "http://purl.org/dc/elements/1.1/",
+        }
+
+        metadata = root.find("opf:metadata", ns)
+        if metadata is None:
+            raise RuntimeError(f"metadata section not found in OPF: {opf_path}")
+
+        for meta in list(metadata.findall("opf:meta", ns)):
+            prop = meta.attrib.get("property")
+            name = meta.attrib.get("name")
+            refines = meta.attrib.get("refines")
+
+            if prop == "belongs-to-collection":
+                metadata.remove(meta)
+                continue
+
+            if prop in {"collection-type", "group-position", "dcterms:identifier"} and refines == "#series":
+                metadata.remove(meta)
+                continue
+
+            if name in {"calibre:series", "calibre:series_index"}:
+                metadata.remove(meta)
+                continue
+
+        meta_collection = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+        meta_collection.set("id", "series")
+        meta_collection.set("property", "belongs-to-collection")
+        meta_collection.text = series_name
+
+        meta_collection_type = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+        meta_collection_type.set("refines", "#series")
+        meta_collection_type.set("property", "collection-type")
+        meta_collection_type.text = "series"
+
+        if series_index is not None:
+            index_text = format_series_index(series_index)
+
+            meta_group_position = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+            meta_group_position.set("refines", "#series")
+            meta_group_position.set("property", "group-position")
+            meta_group_position.text = index_text
+
+            calibre_series_index = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+            calibre_series_index.set("name", "calibre:series_index")
+            calibre_series_index.set("content", index_text)
+
+        calibre_series = ET.SubElement(metadata, "{http://www.idpf.org/2007/opf}meta")
+        calibre_series.set("name", "calibre:series")
+        calibre_series.set("content", series_name)
+
+        indent_xml(root)
+        tree.write(opf_path, encoding="utf-8", xml_declaration=True)
+
+        rebuilt_path = tmpdir_path / "rebuilt.epub"
+        mimetype_file = extract_dir / "mimetype"
+
+        with zipfile.ZipFile(rebuilt_path, "w") as zf:
+            if mimetype_file.exists():
+                zf.write(mimetype_file, "mimetype", compress_type=zipfile.ZIP_STORED)
+
+            for file_path in sorted(extract_dir.rglob("*")):
+                if file_path.is_dir():
+                    continue
+                rel_path = file_path.relative_to(extract_dir)
+                if str(rel_path) == "mimetype":
+                    continue
+                zf.write(file_path, str(rel_path), compress_type=zipfile.ZIP_DEFLATED)
+
+        shutil.move(str(rebuilt_path), str(book_path))
 
 
 def get_dropbox_client():
@@ -296,6 +525,9 @@ def process_file(input_path: Path):
             final_local.unlink()
         shutil.move(str(generated), str(final_local))
 
+    series_name, series_index = get_series_metadata(manga_name, chapter)
+    add_series_metadata_to_book(final_local, series_name, series_index)
+
     remote_path = upload_to_dropbox(final_local, final_name)
 
     return {
@@ -305,6 +537,8 @@ def process_file(input_path: Path):
         "dropbox_path": remote_path,
         "manga": manga_name,
         "chapter": chapter,
+        "series": series_name,
+        "series_index": format_series_index(series_index) if series_index is not None else None,
         "kobo_device": KOBO_DEVICE,
         "kobo_profile": kobo_profile,
         "format": FORMAT,
