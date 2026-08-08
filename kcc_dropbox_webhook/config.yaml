@@ -1,5 +1,5 @@
 name: "KCC Dropbox Webhook"
-version: "2.0.5"
+version: "2.1.1"
 slug: "kcc_dropbox_webhook"
 description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
 url: "https://github.com/Th3ABombs/suwayomi-addon/tree/main/kcc_dropbox_webhook"
@@ -8,6 +8,7 @@ boot: auto
 init: false
 panel_icon: mdi:book-sync
 hassio_api: true
+homeassistant_api: true
 
 arch:
   - amd64
