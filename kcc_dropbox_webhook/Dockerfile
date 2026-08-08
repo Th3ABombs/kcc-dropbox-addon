@@ -20,7 +20,7 @@ RUN git clone --depth 1 https://github.com/ciromattia/kcc.git /opt/kcc \
     && python -m pip install --no-cache-dir -r /opt/kcc/requirements.txt \
     && ln -s /opt/kcc/kcc-c2e.py /usr/local/bin/kcc-c2e \
     && chmod +x /opt/kcc/kcc-c2e.py /usr/local/bin/kcc-c2e \
-    && python -m pip install --no-cache-dir flask dropbox
+    && python -m pip install --no-cache-dir flask dropbox requests
 
 COPY run.sh /run.sh
 COPY app.py /app.py

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import dropbox
+import requests
 from dropbox.files import WriteMode
 from flask import Flask, jsonify, request
 
@@ -34,6 +35,8 @@ KOBO_DEVICE = os.environ.get("KOBO_DEVICE", "Kobo Libra Colour")
 FORMAT = os.environ.get("FORMAT", "KEPUB")
 MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
+NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
+NOTIFY_SERVICE = os.environ.get("NOTIFY_SERVICE", "").strip()
 
 KCC_TIMEOUT = int(os.environ.get("KCC_TIMEOUT", "1800"))
 FILE_STABLE_TIMEOUT = int(os.environ.get("FILE_STABLE_TIMEOUT", "180"))
@@ -382,6 +385,51 @@ def upload_to_dropbox(local_file: Path, remote_filename: str):
     return remote_path
 
 
+def notify_home_assistant_success(result: dict):
+    if not NOTIFY_ON_SUCCESS:
+        return
+
+    if not NOTIFY_SERVICE:
+        app.logger.warning("Notifications enabled but notify_service is empty")
+        return
+
+    if "." not in NOTIFY_SERVICE:
+        app.logger.warning("Invalid notify_service format: %s", NOTIFY_SERVICE)
+        return
+
+    domain, service = NOTIFY_SERVICE.split(".", 1)
+    if domain != "notify" or not service:
+        app.logger.warning("notify_service must be a notify.* service: %s", NOTIFY_SERVICE)
+        return
+
+    supervisor_token = os.environ.get("SUPERVISOR_TOKEN", "").strip()
+    if not supervisor_token:
+        app.logger.warning("SUPERVISOR_TOKEN not available, cannot send Home Assistant notification")
+        return
+
+    title = "Nuovo capitolo caricato su Dropbox"
+    message = (
+        f"{result['manga']} {result['chapter']}\n"
+        f"Formato: {result['format']}\n"
+        f"Device: {result['kobo_device']} ({result['kobo_profile']})\n"
+        f"Dropbox: {result['dropbox_path']}"
+    )
+
+    url = f"http://supervisor/core/api/services/{domain}/{service}"
+    headers = {
+        "Authorization": f"Bearer {supervisor_token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "title": title,
+        "message": message,
+    }
+
+    app.logger.info("Sending Home Assistant notification via %s", NOTIFY_SERVICE)
+    response = requests.post(url, headers=headers, json=payload, timeout=15)
+    response.raise_for_status()
+
+
 def is_probably_temporary_file(path: Path) -> bool:
     temp_suffixes = {
         ".tmp", ".part", ".partial", ".crdownload", ".download", ".!qB", ".filepart"
@@ -602,6 +650,12 @@ def worker():
                 result=result,
                 error=None
             )
+
+            try:
+                notify_home_assistant_success(result)
+            except Exception:
+                app.logger.exception("Unable to send Home Assistant notification for job %s", job_id)
+
             app.logger.info("Job %s completed", job_id)
 
         except subprocess.TimeoutExpired as exc:
@@ -673,6 +727,8 @@ def health():
         "format": FORMAT,
         "manga_mode": MANGA_MODE,
         "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
+        "notify_on_success": NOTIFY_ON_SUCCESS,
+        "notify_service": NOTIFY_SERVICE,
         "kcc_timeout": KCC_TIMEOUT,
         "file_stable_timeout": FILE_STABLE_TIMEOUT,
         "file_stable_for": FILE_STABLE_FOR,

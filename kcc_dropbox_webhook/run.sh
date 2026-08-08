@@ -17,6 +17,8 @@ FILE_STABLE_TIMEOUT="180"
 FILE_STABLE_FOR="5"
 FILE_STABLE_INTERVAL="1"
 KCC_TIMEOUT="1800"
+NOTIFY_ON_SUCCESS="false"
+NOTIFY_SERVICE=""
 
 if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   OUTPUT_DIR="$(jq -r '.output_dir // "/share/kcc-output"' "${OPTIONS_FILE}")"
@@ -33,6 +35,8 @@ if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   FILE_STABLE_FOR="$(jq -r '.file_stable_for // 5' "${OPTIONS_FILE}")"
   FILE_STABLE_INTERVAL="$(jq -r '.file_stable_interval // 1' "${OPTIONS_FILE}")"
   KCC_TIMEOUT="$(jq -r '.kcc_timeout // 1800' "${OPTIONS_FILE}")"
+  NOTIFY_ON_SUCCESS="$(jq -r '.notify_on_success // false' "${OPTIONS_FILE}")"
+  NOTIFY_SERVICE="$(jq -r '.notify_service // ""' "${OPTIONS_FILE}")"
 fi
 
 export OUTPUT_DIR
@@ -49,5 +53,7 @@ export FILE_STABLE_TIMEOUT
 export FILE_STABLE_FOR
 export FILE_STABLE_INTERVAL
 export KCC_TIMEOUT
+export NOTIFY_ON_SUCCESS
+export NOTIFY_SERVICE
 
 exec python3 /app.py

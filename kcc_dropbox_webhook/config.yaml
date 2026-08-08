@@ -1,5 +1,5 @@
 name: "KCC Dropbox Webhook"
-version: "2.0.4"
+version: "2.0.5"
 slug: "kcc_dropbox_webhook"
 description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
 url: "https://github.com/Th3ABombs/suwayomi-addon/tree/main/kcc_dropbox_webhook"
@@ -7,6 +7,7 @@ startup: application
 boot: auto
 init: false
 panel_icon: mdi:book-sync
+hassio_api: true
 
 arch:
   - amd64
@@ -38,6 +39,8 @@ options:
   file_stable_for: 5
   file_stable_interval: 1
   kcc_timeout: 1800
+  notify_on_success: false
+  notify_service: ""
 
 schema:
   output_dir: str
@@ -54,3 +57,5 @@ schema:
   file_stable_for: int(1,120)
   file_stable_interval: int(1,30)
   kcc_timeout: int(30,7200)
+  notify_on_success: bool
+  notify_service: str
