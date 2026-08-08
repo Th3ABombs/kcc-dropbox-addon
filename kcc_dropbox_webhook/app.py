@@ -85,6 +85,30 @@ SPECIAL_CHAPTER_LABELS = [
     "interlude",
 ]
 
+CHAPTER_PATTERNS = [
+    r"\b(?:chapter|chap|ch|capitolo|cap|episode|ep|parte|part)\.?\s*([0-9]+(?:\.[0-9]+)?)\b",
+    r"\bc\s*([0-9]+(?:\.[0-9]+)?)\b",
+    r"\bv(?:ol(?:ume)?)?\.?\s*[0-9]+\s*(?:ch|c|chapter|cap)\.?\s*([0-9]+(?:\.[0-9]+)?)\b",
+    r"\bv[0-9]+\s*c([0-9]+(?:\.[0-9]+)?)\b",
+]
+
+# Un anno tra parentesi o quadre e' la convenzione delle release scanlation
+# ("One Piece 1189 (2024).cbz"): non e' mai il numero di capitolo.
+BRACKETED_YEAR_RE = re.compile(r"[(\[{]\s*(?:19|20)[0-9]{2}\s*[)\]}]")
+TRAILING_NUMBER_RE = re.compile(r"(?:^|[\s._-])([0-9]{1,4}(?:\.[0-9]+)?)$")
+STANDALONE_NUMBER_RE = re.compile(r"\b([0-9]{1,4}(?:\.[0-9]+)?)\b")
+
+# Estensioni che KCC puo' produrre, dalla piu' specifica alla piu' generica.
+KCC_OUTPUT_EXTENSIONS = (".kepub.epub", ".kepub", ".epub", ".cbz", ".mobi", ".azw3", ".pdf")
+
+FORMAT_EXTENSIONS = {
+    "KEPUB": ".kepub.epub",
+    "EPUB": ".epub",
+    "CBZ": ".cbz",
+}
+
+MAX_FILENAME_LENGTH = 120
+
 task_queue = queue.Queue()
 jobs = {}
 jobs_lock = threading.Lock()
@@ -94,9 +118,17 @@ def get_kobo_profile(device_name: str) -> str:
     return KOBO_PROFILE_MAP.get(device_name, "KoLC")
 
 
-def sanitize_filename(name: str) -> str:
+def sanitize_filename(name: str, max_length: int = MAX_FILENAME_LENGTH) -> str:
     name = re.sub(r'[\\/:*?"<>|]+', "", name)
+    name = re.sub(r"[\x00-\x1f\x7f]+", "", name)
     name = re.sub(r"\s+", " ", name).strip()
+    # Punti in testa/coda produrrebbero nomi tipo ".." o "nome." rifiutati da
+    # Dropbox; i punti interni (capitolo 97.5) vanno preservati.
+    name = name.strip(". ")
+
+    if len(name) > max_length:
+        name = name[:max_length].rstrip(". ")
+
     return name
 
 
@@ -129,15 +161,29 @@ def extract_special_chapter_label(base_name: str) -> Optional[str]:
 
     for label in SPECIAL_CHAPTER_LABELS:
         pattern = r"\b" + re.escape(label).replace(r"\ ", r"[\s._-]*") + r"\b"
-        if re.search(pattern, lowered, re.IGNORECASE):
-            pretty = " ".join(word.capitalize() for word in label.replace("-", " ").split())
-            return pretty
+        match = re.search(pattern, lowered)
+        if not match:
+            continue
 
-    ex_match = re.search(r"\bex(?:tra)?[\s._-]*([0-9]+(?:\.[0-9]+)?)\b", lowered, re.IGNORECASE)
+        pretty = " ".join(word.capitalize() for word in label.replace("-", " ").split())
+
+        # "Extra 3", "Special 1": il numero che segue l'etichetta fa parte del nome.
+        numbered = re.match(r"[\s._-]*([0-9]+(?:[.,][0-9]+)?)\b", lowered[match.end():])
+        if numbered:
+            return f"{pretty} {normalize_chapter_number(numbered.group(1))}"
+
+        return pretty
+
+    ex_match = re.search(r"\bex[\s._-]*([0-9]+(?:[.,][0-9]+)?)\b", lowered)
     if ex_match:
         return f"Extra {normalize_chapter_number(ex_match.group(1))}"
 
     return None
+
+
+def _is_inside_any(span, spans) -> bool:
+    start, end = span
+    return any(outer_start <= start and end <= outer_end for outer_start, outer_end in spans)
 
 
 def extract_chapter_info(file_path: Path):
@@ -145,38 +191,89 @@ def extract_chapter_info(file_path: Path):
     base_name = file_path.stem
     cleaned = base_name.replace("_", " ").replace("-", " ")
 
-    patterns = [
-        r"\b(?:chapter|chap|ch|capitolo|cap|episode|ep|parte|part)\.?\s*([0-9]+(?:\.[0-9]+)?)\b",
-        r"\bc\s*([0-9]+(?:\.[0-9]+)?)\b",
-        r"\bv(?:ol(?:ume)?)?\.?\s*[0-9]+\s*(?:ch|c|chapter|cap)\.?\s*([0-9]+(?:\.[0-9]+)?)\b",
-        r"\bv[0-9]+\s*c([0-9]+(?:\.[0-9]+)?)\b",
-    ]
-
-    for pattern in patterns:
+    # 1. Marcatori espliciti di capitolo: hanno sempre la precedenza.
+    for pattern in CHAPTER_PATTERNS:
         match = re.search(pattern, cleaned, re.IGNORECASE)
         if match:
             return manga_name, normalize_chapter_number(match.group(1))
 
-    trailing_match = re.search(r"(?:^|[\s._-])([0-9]{1,4}(?:\.[0-9]+)?)$", cleaned)
-    if trailing_match:
-        return manga_name, normalize_chapter_number(trailing_match.group(1))
-
-    standalone_numbers = re.findall(r"\b([0-9]{1,4}(?:\.[0-9]+)?)\b", cleaned)
-    if standalone_numbers:
-        return manga_name, normalize_chapter_number(standalone_numbers[-1])
-
+    # 2. Capitoli speciali ("Extra 3", "Oneshot", "Side Story"). Va prima dei
+    #    fallback numerici, altrimenti qualsiasi cifra nel nome vincerebbe
+    #    sempre e l'etichetta non verrebbe mai usata.
     special_label = extract_special_chapter_label(base_name)
     if special_label:
         return manga_name, special_label
 
+    # 3. Numero in coda al nome.
+    trailing_match = TRAILING_NUMBER_RE.search(cleaned)
+    if trailing_match:
+        return manga_name, normalize_chapter_number(trailing_match.group(1))
+
+    # 4. Ultimo numero libero, ignorando gli anni tra parentesi: il titolo
+    #    della serie spesso contiene cifre ("Mob Psycho 100 12"), quindi
+    #    l'ultimo numero e' il candidato migliore.
+    year_spans = [m.span() for m in BRACKETED_YEAR_RE.finditer(cleaned)]
+    standalone_numbers = [
+        match.group(1)
+        for match in STANDALONE_NUMBER_RE.finditer(cleaned)
+        if not _is_inside_any(match.span(1), year_spans)
+    ]
+    if standalone_numbers:
+        return manga_name, normalize_chapter_number(standalone_numbers[-1])
+
     return manga_name, "unknown"
 
 
-def find_generated_file(before_files, after_files):
-    new_files = sorted(list(after_files - before_files))
-    if new_files:
-        return new_files[-1]
-    return None
+def is_kcc_output(path: Path) -> bool:
+    lower_name = path.name.lower()
+    return any(lower_name.endswith(extension) for extension in KCC_OUTPUT_EXTENSIONS)
+
+
+def expected_extension_for_format() -> str:
+    return FORMAT_EXTENSIONS.get(FORMAT.upper(), f".{FORMAT.lower()}")
+
+
+def output_extension(path: Path) -> str:
+    # Path.suffixes non va bene: per "Serie 97.5.kepub.epub" restituirebbe
+    # [".5", ".kepub", ".epub"] e il ".5" finirebbe nel nome finale.
+    lower_name = path.name.lower()
+    for extension in KCC_OUTPUT_EXTENSIONS:
+        if lower_name.endswith(extension):
+            return path.name[-len(extension):]
+
+    return path.suffix or expected_extension_for_format()
+
+
+def snapshot_outputs(output_dir: Path) -> dict:
+    snapshot = {}
+
+    for path in output_dir.iterdir():
+        if not path.is_file() or not is_kcc_output(path):
+            continue
+
+        try:
+            stat_result = path.stat()
+        except OSError:
+            continue
+
+        snapshot[path] = (stat_result.st_mtime, stat_result.st_size)
+
+    return snapshot
+
+
+def find_generated_files(output_dir: Path, before: dict):
+    candidates = []
+
+    # Un file e' un output di questa conversione se e' nuovo oppure se KCC lo ha
+    # riscritto: in entrambi i casi lo stato (mtime, size) differisce da prima.
+    for path, state in snapshot_outputs(output_dir).items():
+        if before.get(path) == state:
+            continue
+
+        candidates.append((state[0], path.name, path))
+
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
+    return [path for _, _, path in candidates]
 
 
 def get_series_metadata(manga_name: str, chapter: str):
@@ -407,12 +504,18 @@ def notify_home_assistant_success(result: dict):
         app.logger.warning("SUPERVISOR_TOKEN not available, cannot send Home Assistant notification")
         return
 
+    dropbox_paths = result.get("dropbox_paths") or [result["dropbox_path"]]
+    if len(dropbox_paths) > 1:
+        dropbox_line = "Dropbox:\n" + "\n".join(dropbox_paths)
+    else:
+        dropbox_line = f"Dropbox: {dropbox_paths[0]}"
+
     title = "Nuovo capitolo caricato su Dropbox"
     message = (
         f"{result['manga']} {result['chapter']}\n"
         f"Formato: {result['format']}\n"
         f"Device: {result['kobo_device']} ({result['kobo_profile']})\n"
-        f"Dropbox: {result['dropbox_path']}"
+        f"{dropbox_line}"
     )
 
     url = f"http://supervisor/core/api/services/{domain}/{service}"
@@ -554,14 +657,14 @@ def process_file(input_path: Path):
     )
 
     manga_name, chapter = extract_chapter_info(input_path)
-    safe_manga = sanitize_filename(manga_name)
-    safe_chapter = sanitize_filename(chapter)
+    safe_manga = sanitize_filename(manga_name) or "Unknown Series"
+    safe_chapter = sanitize_filename(chapter) or "unknown"
     title = f"{safe_manga} {safe_chapter}"
 
     output_path = Path(OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    before_files = set(output_path.glob("*"))
+    before_outputs = snapshot_outputs(output_path)
     kobo_profile = get_kobo_profile(KOBO_DEVICE)
 
     cmd = [
@@ -583,36 +686,59 @@ def process_file(input_path: Path):
     if result.stderr.strip():
         app.logger.info("KCC stderr: %s", result.stderr.strip())
 
-    after_files = set(output_path.glob("*"))
-    generated = find_generated_file(before_files, after_files)
+    generated_files = find_generated_files(output_path, before_outputs)
 
-    if generated is None:
-        candidates = sorted(output_path.glob(f"*{safe_chapter}*"))
-        if candidates:
-            generated = candidates[-1]
+    if not generated_files:
+        # Riconversione identica dello stesso capitolo su un filesystem con
+        # timestamp a grana grossa: lo stato del file puo' non essere cambiato.
+        fallback = output_path / f"{title}{expected_extension_for_format()}"
+        if fallback.is_file():
+            app.logger.info("No output change detected, using expected name: %s", fallback)
+            generated_files = [fallback]
 
-    if generated is None or not generated.exists():
+    if not generated_files:
         raise RuntimeError("converted file not found")
 
-    extension = "".join(generated.suffixes) if generated.suffixes else f".{FORMAT.lower()}"
-    final_name = f"{title}{extension}"
-    final_local = output_path / final_name
+    series_name, series_index = get_series_metadata(manga_name, chapter)
 
-    if generated != final_local:
+    # KCC puo' spezzare un volume in piu' file: vanno caricati tutti.
+    multiple_outputs = len(generated_files) > 1
+    if multiple_outputs:
+        app.logger.info("KCC produced %s output files", len(generated_files))
+
+    # Prima tutti gli output vengono spostati su nomi univoci: cosi' il nome
+    # finale di un file non puo' sovrascriverne un altro ancora da elaborare.
+    staged = []
+    for index, generated in enumerate(generated_files, start=1):
+        part_suffix = f" Part {index}" if multiple_outputs else ""
+        final_name = f"{title}{part_suffix}{output_extension(generated)}"
+        staging_path = output_path / f".staging-{uuid.uuid4().hex}"
+        shutil.move(str(generated), str(staging_path))
+        staged.append((staging_path, final_name))
+
+    local_outputs = []
+    remote_paths = []
+
+    for staging_path, final_name in staged:
+        final_local = output_path / final_name
+
         if final_local.exists():
             final_local.unlink()
-        shutil.move(str(generated), str(final_local))
+        shutil.move(str(staging_path), str(final_local))
 
-    series_name, series_index = get_series_metadata(manga_name, chapter)
-    add_series_metadata_to_book(final_local, series_name, series_index)
+        add_series_metadata_to_book(final_local, series_name, series_index)
 
-    remote_path = upload_to_dropbox(final_local, final_name)
+        local_outputs.append(str(final_local))
+        remote_paths.append(upload_to_dropbox(final_local, final_name))
 
     return {
         "input_file": str(input_path),
         "stable_size": stable_size,
-        "local_output": str(final_local),
-        "dropbox_path": remote_path,
+        "local_output": local_outputs[0],
+        "dropbox_path": remote_paths[0],
+        "local_outputs": local_outputs,
+        "dropbox_paths": remote_paths,
+        "output_count": len(remote_paths),
         "manga": manga_name,
         "chapter": chapter,
         "series": series_name,
