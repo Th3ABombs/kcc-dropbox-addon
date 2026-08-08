@@ -43,15 +43,19 @@ FILE_STABLE_INTERVAL = float(os.environ.get("FILE_STABLE_INTERVAL", "1"))
 KOBO_PROFILE_MAP = {
     "Kobo Mini": "KoMT",
     "Kobo Touch": "KoMT",
+    "Kobo Touch 2.0": "KoMT",
     "Kobo Glo": "KoG",
     "Kobo Glo HD": "KoGHD",
     "Kobo Aura": "KoA",
+    "Kobo Aura Edition 2": "KoA",
     "Kobo Aura HD": "KoAHD",
     "Kobo Aura H2O": "KoAH2O",
+    "Kobo Aura H2O Edition 2": "KoAH2O",
     "Kobo Aura ONE": "KoAO",
     "Kobo Nia": "KoN",
     "Kobo Clara HD": "KoC",
     "Kobo Clara 2E": "KoC",
+    "Kobo Clara BW": "KoC",
     "Kobo Clara Colour": "KoCC",
     "Kobo Libra H2O": "KoL",
     "Kobo Libra 2": "KoL",
@@ -59,7 +63,9 @@ KOBO_PROFILE_MAP = {
     "Kobo Forma": "KoF",
     "Kobo Sage": "KoS",
     "Kobo Elipsa": "KoE",
+    "Kobo Elipsa 2E": "KoE",
 }
+
 
 SPECIAL_CHAPTER_LABELS = [
     "extra",
