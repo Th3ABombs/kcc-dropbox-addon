@@ -34,6 +34,8 @@ DROPBOX_REFRESH_TOKEN = os.environ.get("DROPBOX_REFRESH_TOKEN", "")
 KOBO_DEVICE = os.environ.get("KOBO_DEVICE", "Kobo Libra Colour")
 FORMAT = os.environ.get("FORMAT", "KEPUB")
 MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
+UPSCALE = os.environ.get("UPSCALE", "true").lower() == "true"
+STRETCH = os.environ.get("STRETCH", "false").lower() == "true"
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
 NOTIFY_SERVICE = os.environ.get("NOTIFY_SERVICE", "").strip()
@@ -105,6 +107,18 @@ FORMAT_EXTENSIONS = {
     "KEPUB": ".kepub.epub",
     "EPUB": ".epub",
     "CBZ": ".cbz",
+}
+
+# KCC non ha "KEPUB" tra i formati: l'argomento -f non e' vincolato a una lista,
+# quindi "KEPUB" veniva accettato ma non riconosciuto, e la conversione ricadeva
+# sul ramo EPUB generico. Il file usciva come .epub perche' l'estensione
+# .kepub.epub viene assegnata solo se il formato e' esattamente "EPUB" su un
+# profilo Kobo, e su Kobo e' l'estensione a decidere quale renderer usare.
+# --nokepub e' il modo per ottenere un epub semplice.
+KCC_FORMAT_ARGS = {
+    "KEPUB": ["-f", "EPUB"],
+    "EPUB": ["-f", "EPUB", "--nokepub"],
+    "CBZ": ["-f", "CBZ"],
 }
 
 MAX_FILENAME_LENGTH = 120
@@ -671,13 +685,23 @@ def process_file(input_path: Path):
         "python3",
         "/opt/kcc/kcc-c2e.py",
         "-p", kobo_profile,
-        "-f", FORMAT,
         "-o", OUTPUT_DIR,
         "-t", title,
     ]
 
+    cmd.extend(KCC_FORMAT_ARGS.get(FORMAT.upper(), KCC_FORMAT_ARGS["KEPUB"]))
+
     if MANGA_MODE:
         cmd.append("-m")
+
+    # Senza -u le pagine piu' piccole dello schermo restano a dimensione nativa
+    # e vengono mostrate centrate e piccole; -s riempie lo schermo ma deforma
+    # le proporzioni.
+    if UPSCALE:
+        cmd.append("-u")
+
+    if STRETCH:
+        cmd.append("-s")
 
     cmd.append(str(input_path))
 
@@ -748,6 +772,8 @@ def process_file(input_path: Path):
         "kobo_device": KOBO_DEVICE,
         "kobo_profile": kobo_profile,
         "format": FORMAT,
+        "upscale": UPSCALE,
+        "stretch": STRETCH,
     }
 
 
@@ -851,7 +877,10 @@ def health():
         "kobo_device": KOBO_DEVICE,
         "kobo_profile": get_kobo_profile(KOBO_DEVICE),
         "format": FORMAT,
+        "output_extension": FORMAT_EXTENSIONS.get(FORMAT.upper(), ".kepub.epub"),
         "manga_mode": MANGA_MODE,
+        "upscale": UPSCALE,
+        "stretch": STRETCH,
         "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
         "notify_on_success": NOTIFY_ON_SUCCESS,
         "notify_service": NOTIFY_SERVICE,

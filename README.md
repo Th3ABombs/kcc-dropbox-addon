@@ -76,6 +76,8 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `kobo_device` | `Kobo Libra Colour` | Determina il profilo KCC |
 | `format` | `KEPUB` | `EPUB`, `KEPUB` o `CBZ` |
 | `manga_mode` | `true` | Passa `-m` a KCC (lettura destra→sinistra) |
+| `upscale` | `true` | Passa `-u`: ingrandisce le pagine più piccole dello schermo mantenendo le proporzioni |
+| `stretch` | `false` | Passa `-s`: riempie esattamente lo schermo, **senza** mantenere le proporzioni |
 | `force_creator_to_series` | `false` | Scrive il nome della serie anche come autore |
 | `file_stable_timeout` | `180` | Secondi massimi di attesa della stabilità del file |
 | `file_stable_for` | `5` | Secondi di dimensione invariata richiesti |
@@ -83,6 +85,20 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `kcc_timeout` | `1800` | Timeout della conversione KCC |
 | `notify_on_success` | `false` | Invia una notifica Home Assistant a conversione riuscita |
 | `notify_service` | — | Servizio da chiamare, es. `notify.mobile_app_pixel` |
+
+## Pagine troppo piccole sul reader
+
+KCC ridimensiona le immagini alla risoluzione del profilo dispositivo, ma per default **non ingrandisce** quelle più piccole: restano a dimensione nativa e appaiono centrate e piccole. Il problema si nota passando a un dispositivo con più pixel (Kobo Aura 758×1024 → Kobo Aura ONE 1404×1872): le stesse scansioni che prima venivano ridotte a schermo pieno ora sono sotto la risoluzione del pannello.
+
+Se nei log compare:
+
+```
+WARNING: More than 25% of images are smaller than target device resolution.
+```
+
+tieni `upscale: true`. Usa `stretch` solo se accetti la deformazione delle proporzioni.
+
+Nota sui formati: `format: KEPUB` esegue KCC con `-f EPUB`, perché è il profilo Kobo a far produrre l'estensione `.kepub.epub`; `KEPUB` non è un valore di formato valido per KCC.
 
 ## Note
 

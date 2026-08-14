@@ -16,6 +16,17 @@ servizio `notify.*` (es. `notify.mobile_app_pixel`).
 
 L'elenco completo delle opzioni è nel README del repository.
 
+### Pagine troppo piccole sul reader
+
+Per default KCC non ingrandisce le pagine più piccole della risoluzione del
+dispositivo: restano a dimensione nativa e si vedono piccole e centrate. Succede
+tipicamente cambiando reader con uno a risoluzione maggiore (Kobo Aura 758×1024
+→ Kobo Aura ONE 1404×1872). L'opzione `upscale` (default `true`) le ingrandisce
+mantenendo le proporzioni; `stretch` riempie lo schermo ma le deforma.
+
+Cambiando `upscale` o `stretch` i capitoli già convertiti non vengono rigenerati:
+va rilanciata la conversione dei file che vuoi aggiornare.
+
 ## Endpoint
 
 ### POST /convert

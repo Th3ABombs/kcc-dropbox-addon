@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.2.0
+- Fixed the output never being a real KEPUB. KCC's `-f` accepts any string
+  without validating it, so `-f KEPUB` was silently unrecognised: the conversion
+  fell through to the generic EPUB branch and the file was written as `.epub`,
+  because KCC only assigns the `.kepub.epub` extension when the format is
+  exactly `EPUB` on a Kobo profile. On Kobo the extension selects the renderer,
+  so pages were shown by the plain EPUB engine. `format: KEPUB` now runs
+  `-f EPUB` (Kobo profile → `.kepub.epub`) and `format: EPUB` adds `--nokepub`.
+- Added the `upscale` option (default `true`), which passes `-u` to KCC. Without
+  it, pages smaller than the device resolution are left at native size and shown
+  small and centred — very visible on high resolution devices such as the Kobo
+  Aura ONE (1404x1872) compared to a Kobo Aura (758x1024).
+- Added the `stretch` option (default `false`), which passes `-s` to KCC: fills
+  the screen exactly but does not preserve the aspect ratio.
+- Fixed `manga_mode: false` being ignored: in jq the `//` operator also discards
+  `false`, so the option always evaluated to `true`.
+- `/health` now reports `upscale`, `stretch` and the expected output extension.
+
 ## 2.1.3
 - Fixed chapter detection picking a bracketed year instead of the chapter number
   (`One Piece 1189 (2024).cbz` was uploaded as chapter 2024).
