@@ -1,5 +1,5 @@
 name: "KCC Dropbox Webhook"
-version: "2.2.0"
+version: "2.3.0"
 slug: "kcc_dropbox_webhook"
 description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
 url: "https://github.com/Th3ABombs/kcc-dropbox-addon/tree/main/kcc_dropbox_webhook"
@@ -37,6 +37,7 @@ options:
   manga_mode: true
   upscale: true
   stretch: false
+  source_in_title: false
   force_creator_to_series: false
   file_stable_timeout: 180
   file_stable_for: 5
@@ -57,6 +58,7 @@ schema:
   manga_mode: bool
   upscale: bool
   stretch: bool
+  source_in_title: bool
   force_creator_to_series: bool
   file_stable_timeout: int(10,3600)
   file_stable_for: int(1,120)

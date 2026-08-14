@@ -36,6 +36,7 @@ FORMAT = os.environ.get("FORMAT", "KEPUB")
 MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
 UPSCALE = os.environ.get("UPSCALE", "true").lower() == "true"
 STRETCH = os.environ.get("STRETCH", "false").lower() == "true"
+SOURCE_IN_TITLE = os.environ.get("SOURCE_IN_TITLE", "false").lower() == "true"
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
 NOTIFY_SERVICE = os.environ.get("NOTIFY_SERVICE", "").strip()
@@ -290,8 +291,23 @@ def find_generated_files(output_dir: Path, before: dict):
     return [path for _, _, path in candidates]
 
 
-def get_series_metadata(manga_name: str, chapter: str):
-    series_name = manga_name.strip()
+def extract_source_name(file_path: Path) -> Optional[str]:
+    # Layout di Suwayomi: <watch_root>/<fonte>/<manga>/<capitolo>.cbz. La fonte
+    # e' la cartella sopra quella del manga, e non esiste se il manga sta
+    # direttamente sotto watch_root.
+    try:
+        relative = file_path.resolve().relative_to(Path(WATCH_ROOT).resolve())
+    except ValueError:
+        return None
+
+    if len(relative.parts) < 3:
+        return None
+
+    return relative.parts[-3]
+
+
+def get_series_metadata(manga_name: str, chapter: str, source_suffix: str = ""):
+    series_name = f"{manga_name.strip()}{source_suffix}"
 
     try:
         series_index = float(chapter)
@@ -673,7 +689,14 @@ def process_file(input_path: Path):
     manga_name, chapter = extract_chapter_info(input_path)
     safe_manga = sanitize_filename(manga_name) or "Unknown Series"
     safe_chapter = sanitize_filename(chapter) or "unknown"
-    title = f"{safe_manga} {safe_chapter}"
+
+    # Con piu' fonti per lo stesso manga i nomi coinciderebbero e l'upload
+    # successivo sovrascriverebbe il precedente: la fonte li tiene separati.
+    source_name = extract_source_name(input_path) if SOURCE_IN_TITLE else None
+    safe_source = sanitize_filename(source_name) if source_name else ""
+    source_suffix = f" [{safe_source}]" if safe_source else ""
+
+    title = f"{safe_manga} {safe_chapter}{source_suffix}"
 
     output_path = Path(OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -723,7 +746,7 @@ def process_file(input_path: Path):
     if not generated_files:
         raise RuntimeError("converted file not found")
 
-    series_name, series_index = get_series_metadata(manga_name, chapter)
+    series_name, series_index = get_series_metadata(manga_name, chapter, source_suffix)
 
     # KCC puo' spezzare un volume in piu' file: vanno caricati tutti.
     multiple_outputs = len(generated_files) > 1
@@ -765,6 +788,7 @@ def process_file(input_path: Path):
         "output_count": len(remote_paths),
         "manga": manga_name,
         "chapter": chapter,
+        "source": source_name,
         "series": series_name,
         "series_index": format_series_index(series_index) if series_index is not None else None,
         "creator_forced_to": series_name if FORCE_CREATOR_TO_SERIES else None,
@@ -881,6 +905,7 @@ def health():
         "manga_mode": MANGA_MODE,
         "upscale": UPSCALE,
         "stretch": STRETCH,
+        "source_in_title": SOURCE_IN_TITLE,
         "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
         "notify_on_success": NOTIFY_ON_SUCCESS,
         "notify_service": NOTIFY_SERVICE,

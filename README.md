@@ -78,6 +78,7 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `manga_mode` | `true` | Passa `-m` a KCC (lettura destra→sinistra) |
 | `upscale` | `true` | Passa `-u`: ingrandisce le pagine più piccole dello schermo mantenendo le proporzioni |
 | `stretch` | `false` | Passa `-s`: riempie esattamente lo schermo, **senza** mantenere le proporzioni |
+| `source_in_title` | `false` | Aggiunge la fonte Suwayomi a nome file e serie, evitando collisioni tra fonti diverse |
 | `force_creator_to_series` | `false` | Scrive il nome della serie anche come autore |
 | `file_stable_timeout` | `180` | Secondi massimi di attesa della stabilità del file |
 | `file_stable_for` | `5` | Secondi di dimensione invariata richiesti |
@@ -85,6 +86,27 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `kcc_timeout` | `1800` | Timeout della conversione KCC |
 | `notify_on_success` | `false` | Invia una notifica Home Assistant a conversione riuscita |
 | `notify_service` | — | Servizio da chiamare, es. `notify.mobile_app_pixel` |
+
+## Più fonti per lo stesso manga
+
+Il nome della serie viene ricavato dalla cartella del manga, quindi la fonte Suwayomi (`mangas/<fonte>/<manga>/`) è normalmente ignorata. Se scarichi lo stesso manga da due fonti, i nomi generati coincidono e l'upload successivo **sovrascrive** il precedente senza errori, perché Dropbox viene scritto in `WriteMode.overwrite`.
+
+Con `source_in_title: true` la fonte entra nel nome file e nel nome serie:
+
+```
+Bleach 50 [Mangaworld (IT)].kepub.epub   serie: Bleach [Mangaworld (IT)]
+Bleach 50 [MangaDex].kepub.epub          serie: Bleach [MangaDex]
+```
+
+L'indice di capitolo resta numerico, quindi l'ordinamento dentro ogni serie è invariato. Se il manga sta direttamente sotto `watch_root` (senza livello fonte), non viene aggiunto nessun suffisso.
+
+## Raggruppamento per serie sul Kobo
+
+Il firmware Kobo **non** legge i metadati di serie dai libri sideloaded: le colonne `Series` del database vengono popolate solo per i libri acquistati dallo store. Per questo l'add-on scrive comunque i metadati corretti, ma il Kobo da solo li ignora — da cui l'esistenza di `force_creator_to_series`, che usa il campo autore come raggruppamento di fortuna.
+
+Per avere il raggruppamento vero serve un mod lato dispositivo, [NickelSeries](https://pgaskin.net/kobo-mods/NickelSeries/): si copia `KoboRoot.tgz` nella cartella `.kobo` e si riavvia. Legge sia `calibre:series`/`calibre:series_index` sia i campi EPUB3 `belongs-to-collection`/`group-position` — entrambi già scritti da questo add-on, con Calibre che ha la precedenza.
+
+Con NickelSeries installato conviene rimettere `force_creator_to_series: false`, così l'autore resta corretto e il raggruppamento arriva dai metadati di serie.
 
 ## Pagine troppo piccole sul reader
 

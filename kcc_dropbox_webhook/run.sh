@@ -14,6 +14,7 @@ FORMAT="KEPUB"
 MANGA_MODE="true"
 UPSCALE="true"
 STRETCH="false"
+SOURCE_IN_TITLE="false"
 FORCE_CREATOR_TO_SERIES="false"
 FILE_STABLE_TIMEOUT="180"
 FILE_STABLE_FOR="5"
@@ -36,6 +37,7 @@ if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   MANGA_MODE="$(jq -r 'if .manga_mode == null then true else .manga_mode end' "${OPTIONS_FILE}")"
   UPSCALE="$(jq -r 'if .upscale == null then true else .upscale end' "${OPTIONS_FILE}")"
   STRETCH="$(jq -r 'if .stretch == null then false else .stretch end' "${OPTIONS_FILE}")"
+  SOURCE_IN_TITLE="$(jq -r 'if .source_in_title == null then false else .source_in_title end' "${OPTIONS_FILE}")"
   FORCE_CREATOR_TO_SERIES="$(jq -r '.force_creator_to_series // false' "${OPTIONS_FILE}")"
   FILE_STABLE_TIMEOUT="$(jq -r '.file_stable_timeout // 180' "${OPTIONS_FILE}")"
   FILE_STABLE_FOR="$(jq -r '.file_stable_for // 5' "${OPTIONS_FILE}")"
@@ -56,6 +58,7 @@ export FORMAT
 export MANGA_MODE
 export UPSCALE
 export STRETCH
+export SOURCE_IN_TITLE
 export FORCE_CREATOR_TO_SERIES
 export FILE_STABLE_TIMEOUT
 export FILE_STABLE_FOR

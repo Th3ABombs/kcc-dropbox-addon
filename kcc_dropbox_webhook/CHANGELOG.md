@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.0
+- Added the `source_in_title` option (default `false`). With multiple Suwayomi
+  sources for the same manga the generated names were identical, because the
+  source folder is not part of the name: the second upload silently overwrote
+  the first, since Dropbox uploads use `WriteMode.overwrite`. When enabled, the
+  source is appended to both the filename and the series name
+  (`Bleach 50 [Mangaworld (IT)].kepub.epub`, series `Bleach [Mangaworld (IT)]`).
+- `/health` reports `source_in_title`, and the job result includes `source`.
+
 ## 2.2.0
 - Fixed the output never being a real KEPUB. KCC's `-f` accepts any string
   without validating it, so `-f KEPUB` was silently unrecognised: the conversion
