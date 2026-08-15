@@ -38,6 +38,37 @@ Risposte:
 
 Stato di un singolo job: `queued`, `processing`, `done` o `error`. Se completato include `result` (nomi finali, path Dropbox, serie e indice); se fallito include `error` con l'output di KCC.
 
+### `POST /sync`
+
+Riconcilia la cartella locale con quella Dropbox. Per ogni file sorgente sotto `watch_root` calcola il nome che avrebbe una volta convertito e lo cerca su Dropbox:
+
+- **mancanti** → accodati per la conversione (job con `origin: sync`);
+- **orfani** → file caricati dall'add-on che nessun capitolo locale rivendica più (capitolo cancellato, oppure nome cambiato dopo una modifica di `pad_chapter_digits` o `source_in_title`). Vengono cancellati solo se `sync_delete_orphans` è attiva.
+
+Body opzionale:
+
+```json
+{ "dry_run": true, "force": false }
+```
+
+`dry_run` mostra il piano senza convertire né cancellare. `force` supera `sync_delete_limit`. Risponde `409` se una sincronizzazione è già in corso.
+
+Con `sync_on_convert: true` la stessa riconciliazione parte automaticamente dopo ogni conversione arrivata dal webhook.
+
+#### Cosa può cancellare
+
+Gli upload vengono registrati in `/data/uploads.json`: la sincronizzazione cancella **solo** file che l'add-on ha caricato. Quello che metti nella cartella Dropbox per conto tuo non viene mai toccato. I file caricati prima della 2.5.0 vengono adottati nel registro non appena corrispondono a un capitolo locale.
+
+Tre protezioni contro le cancellazioni di massa:
+
+| Protezione | Comportamento |
+| --- | --- |
+| `watch_root` assente | La sincronizzazione fallisce senza cancellare nulla (share non montata) |
+| Nessun file sorgente trovato | Idem: tutti i capitoli sembrerebbero cancellati |
+| Più di `sync_delete_limit` orfani | Cancellazione saltata e motivo nella risposta, serve `force` |
+
+Se usi KoboCloud con `REMOVE_DELETED` attivo, le cancellazioni su Dropbox si propagano anche al reader.
+
 ### `GET /jobs`
 
 Tutti i job noti, dal più recente.
@@ -88,6 +119,9 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `kcc_timeout` | `1800` | Timeout della conversione KCC |
 | `notify_on_success` | `false` | Invia una notifica Home Assistant a conversione riuscita |
 | `notify_service` | — | Servizio da chiamare, es. `notify.mobile_app_pixel` |
+| `sync_on_convert` | `false` | Riconcilia con Dropbox dopo ogni conversione dal webhook |
+| `sync_delete_orphans` | `false` | Permette alla sincronizzazione di cancellare da Dropbox i file senza capitolo locale |
+| `sync_delete_limit` | `50` | Oltre questo numero di orfani la cancellazione viene saltata, salvo `force` |
 
 ## Più fonti per lo stesso manga
 

@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -39,6 +40,10 @@ STRETCH = os.environ.get("STRETCH", "false").lower() == "true"
 SOURCE_IN_TITLE = os.environ.get("SOURCE_IN_TITLE", "false").lower() == "true"
 AUTHOR = os.environ.get("AUTHOR", "").strip()
 PAD_CHAPTER_DIGITS = int(os.environ.get("PAD_CHAPTER_DIGITS", "0"))
+SYNC_ON_CONVERT = os.environ.get("SYNC_ON_CONVERT", "false").lower() == "true"
+SYNC_DELETE_ORPHANS = os.environ.get("SYNC_DELETE_ORPHANS", "false").lower() == "true"
+SYNC_DELETE_LIMIT = int(os.environ.get("SYNC_DELETE_LIMIT", "50"))
+STATE_DIR = os.environ.get("STATE_DIR", "/data")
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
 NOTIFY_SERVICE = os.environ.get("NOTIFY_SERVICE", "").strip()
@@ -129,6 +134,10 @@ MAX_FILENAME_LENGTH = 120
 task_queue = queue.Queue()
 jobs = {}
 jobs_lock = threading.Lock()
+registry_lock = threading.Lock()
+sync_lock = threading.Lock()
+
+SOURCE_EXTENSIONS = (".cbz", ".cbr", ".cb7", ".zip", ".rar", ".7z", ".pdf")
 
 
 def get_kobo_profile(device_name: str) -> str:
@@ -500,6 +509,48 @@ def add_series_metadata_to_book(book_path: Path, series_name: str, series_index:
         shutil.move(str(rebuilt_path), str(book_path))
 
 
+def build_output_title(input_path: Path):
+    manga_name, chapter = extract_chapter_info(input_path)
+    safe_manga = sanitize_filename(manga_name) or "Unknown Series"
+    safe_chapter = sanitize_filename(pad_chapter_number(chapter, PAD_CHAPTER_DIGITS)) or "unknown"
+
+    # Con piu' fonti per lo stesso manga i nomi coinciderebbero e l'upload
+    # successivo sovrascriverebbe il precedente: la fonte li tiene separati.
+    source_name = extract_source_name(input_path) if SOURCE_IN_TITLE else None
+    safe_source = sanitize_filename(source_name) if source_name else ""
+    source_suffix = f" [{safe_source}]" if safe_source else ""
+
+    title = f"{safe_manga} {safe_chapter}{source_suffix}"
+
+    return title, manga_name, chapter, source_name, source_suffix
+
+
+def remote_matches_title(remote_filename: str, title: str) -> bool:
+    stem = remote_filename
+    for extension in KCC_OUTPUT_EXTENSIONS:
+        if stem.lower().endswith(extension):
+            stem = stem[: -len(extension)]
+            break
+
+    # Il singolo output usa il titolo esatto, gli output multipli " Part N".
+    return stem == title or stem.startswith(f"{title} Part ")
+
+
+def scan_source_files(root: Path):
+    found = []
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in SOURCE_EXTENSIONS:
+            continue
+        if is_probably_temporary_file(path):
+            continue
+        found.append(path)
+
+    return found
+
+
 def get_dropbox_client():
     if not DROPBOX_APP_KEY or not DROPBOX_APP_SECRET or not DROPBOX_REFRESH_TOKEN:
         raise RuntimeError("Dropbox app key, app secret, or refresh token not configured")
@@ -526,6 +577,68 @@ def upload_to_dropbox(local_file: Path, remote_filename: str):
         )
 
     return remote_path
+
+
+def list_dropbox_files() -> dict:
+    dbx = get_dropbox_client()
+    folder = DROPBOX_FOLDER.rstrip("/")
+    remote_files = {}
+
+    result = dbx.files_list_folder(folder)
+    while True:
+        for entry in result.entries:
+            if isinstance(entry, dropbox.files.FileMetadata):
+                remote_files[entry.name] = entry.path_display
+        if not result.has_more:
+            break
+        result = dbx.files_list_folder_continue(result.cursor)
+
+    return remote_files
+
+
+def delete_from_dropbox(remote_path: str):
+    dbx = get_dropbox_client()
+    app.logger.info("Deleting from Dropbox: %s", remote_path)
+    dbx.files_delete_v2(remote_path)
+
+
+# Registro degli upload: la sincronizzazione cancella solo cio' che l'add-on ha
+# davvero caricato, cosi' i file messi a mano nella cartella Dropbox restano
+# intoccati anche in modalita' mirror.
+def registry_path() -> Path:
+    return Path(STATE_DIR) / "uploads.json"
+
+
+def load_registry() -> dict:
+    try:
+        with registry_path().open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        app.logger.exception("Unable to read upload registry, treating it as empty")
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def save_registry(registry: dict):
+    path = registry_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(path.name + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            json.dump(registry, f, indent=2, sort_keys=True)
+        tmp_path.replace(path)
+    except OSError:
+        app.logger.exception("Unable to write upload registry")
+
+
+def record_upload(remote_filename: str, input_path: Path):
+    with registry_lock:
+        registry = load_registry()
+        registry[remote_filename] = str(input_path)
+        save_registry(registry)
 
 
 def notify_home_assistant_success(result: dict):
@@ -649,6 +762,7 @@ def serialize_job(job):
         "job_id": job["job_id"],
         "status": job["status"],
         "file_path": job["file_path"],
+        "origin": job.get("origin", "webhook"),
         "created_at": job["created_at"],
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
@@ -702,17 +816,7 @@ def process_file(input_path: Path):
         interval=FILE_STABLE_INTERVAL
     )
 
-    manga_name, chapter = extract_chapter_info(input_path)
-    safe_manga = sanitize_filename(manga_name) or "Unknown Series"
-    safe_chapter = sanitize_filename(pad_chapter_number(chapter, PAD_CHAPTER_DIGITS)) or "unknown"
-
-    # Con piu' fonti per lo stesso manga i nomi coinciderebbero e l'upload
-    # successivo sovrascriverebbe il precedente: la fonte li tiene separati.
-    source_name = extract_source_name(input_path) if SOURCE_IN_TITLE else None
-    safe_source = sanitize_filename(source_name) if source_name else ""
-    source_suffix = f" [{safe_source}]" if safe_source else ""
-
-    title = f"{safe_manga} {safe_chapter}{source_suffix}"
+    title, manga_name, chapter, source_name, source_suffix = build_output_title(input_path)
 
     output_path = Path(OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -796,8 +900,11 @@ def process_file(input_path: Path):
 
         add_series_metadata_to_book(final_local, series_name, series_index)
 
+        remote_path = upload_to_dropbox(final_local, final_name)
+        record_upload(final_name, input_path)
+
         local_outputs.append(str(final_local))
-        remote_paths.append(upload_to_dropbox(final_local, final_name))
+        remote_paths.append(remote_path)
 
     return {
         "input_file": str(input_path),
@@ -820,6 +927,149 @@ def process_file(input_path: Path):
         "upscale": UPSCALE,
         "stretch": STRETCH,
     }
+
+
+def enqueue_job(input_path: Path, origin: str = "webhook") -> dict:
+    job_id = str(uuid.uuid4())
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "file_path": str(input_path),
+        "origin": origin,
+        "created_at": utc_now(),
+        "started_at": None,
+        "finished_at": None,
+        "result": None,
+        "error": None,
+    }
+
+    with jobs_lock:
+        jobs[job_id] = job
+
+    task_queue.put(job_id)
+    return job
+
+
+def reconcile(dry_run: bool = False, force: bool = False) -> dict:
+    watch_root_path = Path(WATCH_ROOT)
+
+    # Se la share non e' montata ogni capitolo risulterebbe mancante e il
+    # mirror svuoterebbe Dropbox: meglio fallire che cancellare tutto.
+    if not watch_root_path.is_dir():
+        raise RuntimeError(f"watch_root not available: {WATCH_ROOT}")
+
+    local_files = scan_source_files(watch_root_path)
+    if not local_files:
+        raise RuntimeError(f"no source files found under watch_root: {WATCH_ROOT}")
+
+    remote_files = list_dropbox_files()
+
+    with registry_lock:
+        registry = load_registry()
+        registry_changed = False
+
+        missing = []
+        claimed = set()
+
+        for input_path in local_files:
+            title, _, _, _, _ = build_output_title(input_path)
+            matches = [name for name in remote_files if remote_matches_title(name, title)]
+
+            if not matches:
+                missing.append(input_path)
+                continue
+
+            claimed.update(matches)
+
+            # Adozione: un file remoto che corrisponde a un capitolo locale e'
+            # nostro anche se caricato prima che esistesse il registro.
+            for name in matches:
+                if registry.get(name) != str(input_path):
+                    registry[name] = str(input_path)
+                    registry_changed = True
+
+        # Orfano = file nostro che nessun capitolo locale rivendica piu'. Copre
+        # sia il capitolo cancellato sia il nome cambiato (es. dopo aver
+        # modificato pad_chapter_digits o source_in_title).
+        orphans = sorted(
+            name for name in registry
+            if name in remote_files and name not in claimed
+        )
+
+        # Voci che puntano a file remoti spariti: solo pulizia del registro.
+        for name in [name for name in registry if name not in remote_files]:
+            del registry[name]
+            registry_changed = True
+
+        deleted = []
+        delete_skipped = None
+
+        if orphans:
+            if not SYNC_DELETE_ORPHANS:
+                delete_skipped = "sync_delete_orphans is disabled"
+            elif dry_run:
+                delete_skipped = "dry run"
+            elif len(orphans) > SYNC_DELETE_LIMIT and not force:
+                delete_skipped = (
+                    f"{len(orphans)} orphans exceed sync_delete_limit={SYNC_DELETE_LIMIT}, "
+                    f"use force to override"
+                )
+            else:
+                for name in orphans:
+                    try:
+                        delete_from_dropbox(remote_files[name])
+                    except Exception:
+                        app.logger.exception("Unable to delete orphan from Dropbox: %s", name)
+                        continue
+                    deleted.append(name)
+                    del registry[name]
+                    registry_changed = True
+
+        if registry_changed and not dry_run:
+            save_registry(registry)
+
+    queued = []
+    if not dry_run:
+        for input_path in missing:
+            if find_existing_job_for_file(str(input_path)):
+                continue
+            job = enqueue_job(input_path, origin="sync")
+            queued.append(job["job_id"])
+
+    summary = {
+        "dry_run": dry_run,
+        "local_files": len(local_files),
+        "remote_files": len(remote_files),
+        "missing": [str(path) for path in missing],
+        "missing_count": len(missing),
+        "queued_jobs": queued,
+        "orphans": orphans,
+        "orphan_count": len(orphans),
+        "deleted": deleted,
+        "delete_skipped": delete_skipped,
+        "delete_orphans_enabled": SYNC_DELETE_ORPHANS,
+    }
+
+    app.logger.info(
+        "Sync summary: local=%s remote=%s missing=%s orphans=%s deleted=%s skipped=%s",
+        len(local_files), len(remote_files), len(missing), len(orphans),
+        len(deleted), delete_skipped
+    )
+
+    return summary
+
+
+def run_sync(dry_run: bool = False, force: bool = False) -> Optional[dict]:
+    # Una sola riconciliazione per volta: quella automatica di fine job non
+    # deve accavallarsi con una chiamata manuale.
+    if not sync_lock.acquire(blocking=False):
+        app.logger.info("Sync already running, skipping")
+        return None
+
+    try:
+        return reconcile(dry_run=dry_run, force=force)
+    finally:
+        sync_lock.release()
 
 
 def worker():
@@ -852,6 +1102,14 @@ def worker():
                 notify_home_assistant_success(result)
             except Exception:
                 app.logger.exception("Unable to send Home Assistant notification for job %s", job_id)
+
+            # Solo per i job arrivati dal webhook: quelli accodati da una
+            # sincronizzazione non ne devono innescare un'altra.
+            if SYNC_ON_CONVERT and job.get("origin", "webhook") == "webhook":
+                try:
+                    run_sync()
+                except Exception:
+                    app.logger.exception("Sync after job %s failed", job_id)
 
             app.logger.info("Job %s completed", job_id)
 
@@ -932,6 +1190,10 @@ def health():
         "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
         "notify_on_success": NOTIFY_ON_SUCCESS,
         "notify_service": NOTIFY_SERVICE,
+        "sync_on_convert": SYNC_ON_CONVERT,
+        "sync_delete_orphans": SYNC_DELETE_ORPHANS,
+        "sync_delete_limit": SYNC_DELETE_LIMIT,
+        "tracked_uploads": len(load_registry()),
         "kcc_timeout": KCC_TIMEOUT,
         "file_stable_timeout": FILE_STABLE_TIMEOUT,
         "file_stable_for": FILE_STABLE_FOR,
@@ -1020,31 +1282,45 @@ def convert():
             "queue_size": task_queue.qsize(),
         }), 202
 
-    job_id = str(uuid.uuid4())
-    job = {
-        "job_id": job_id,
-        "status": "queued",
-        "file_path": str(input_path),
-        "created_at": utc_now(),
-        "started_at": None,
-        "finished_at": None,
-        "result": None,
-        "error": None,
-    }
-
-    with jobs_lock:
-        jobs[job_id] = job
-
-    task_queue.put(job_id)
+    job = enqueue_job(input_path)
 
     return jsonify({
         "status": "queued",
         "message": "job queued successfully",
-        "job_id": job_id,
+        "job_id": job["job_id"],
         "file_path": str(input_path),
         "queue_size": task_queue.qsize(),
         "job": serialize_job(job),
     }), 202
+
+
+@app.route("/sync", methods=["POST"])
+def sync():
+    data = request.get_json(force=True, silent=True) or {}
+    dry_run = bool(data.get("dry_run", False))
+    force = bool(data.get("force", False))
+
+    app.logger.info("Received sync request: dry_run=%s force=%s", dry_run, force)
+
+    try:
+        summary = run_sync(dry_run=dry_run, force=force)
+    except Exception as exc:
+        app.logger.exception("Sync failed")
+        return jsonify({
+            "status": "error",
+            "message": str(exc),
+        }), 500
+
+    if summary is None:
+        return jsonify({
+            "status": "busy",
+            "message": "a sync is already running",
+        }), 409
+
+    return jsonify({
+        "status": "ok",
+        "sync": summary,
+    })
 
 
 @app.route("/jobs", methods=["GET"])

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.5.0
+- Added `POST /sync`, which reconciles the local Suwayomi folder with the
+  Dropbox folder: chapters with no uploaded counterpart are queued for
+  conversion, and files that no longer match any local chapter are reported
+  (and deleted, when enabled). Accepts `dry_run` and `force`.
+- Added the `sync_on_convert` option (default `false`): runs the same
+  reconciliation after every webhook conversion. Jobs queued by a sync never
+  trigger another one.
+- Added the `sync_delete_orphans` (default `false`) and `sync_delete_limit`
+  (default `50`) options.
+- Uploads are now tracked in a persistent registry under `/data`, so the sync
+  can only ever delete files this add-on uploaded. Files added to the Dropbox
+  folder by other means are never touched. Files already uploaded before this
+  version are adopted into the registry when they match a local chapter.
+- The sync refuses to run when `watch_root` is missing or contains no source
+  files, which would otherwise make every chapter look deleted.
+- Job records and `/jobs` now include `origin` (`webhook` or `sync`).
+
 ## 2.4.0
 - Added the `author` option, passed to KCC as `-a`. Without it KCC writes the
   literal string `KCC` as the author, which is what shows up in the library when

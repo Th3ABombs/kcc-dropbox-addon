@@ -24,6 +24,9 @@ FILE_STABLE_INTERVAL="1"
 KCC_TIMEOUT="1800"
 NOTIFY_ON_SUCCESS="false"
 NOTIFY_SERVICE=""
+SYNC_ON_CONVERT="false"
+SYNC_DELETE_ORPHANS="false"
+SYNC_DELETE_LIMIT="50"
 
 if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   OUTPUT_DIR="$(jq -r '.output_dir // "/share/kcc-output"' "${OPTIONS_FILE}")"
@@ -49,6 +52,9 @@ if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   KCC_TIMEOUT="$(jq -r '.kcc_timeout // 1800' "${OPTIONS_FILE}")"
   NOTIFY_ON_SUCCESS="$(jq -r '.notify_on_success // false' "${OPTIONS_FILE}")"
   NOTIFY_SERVICE="$(jq -r '.notify_service // ""' "${OPTIONS_FILE}")"
+  SYNC_ON_CONVERT="$(jq -r 'if .sync_on_convert == null then false else .sync_on_convert end' "${OPTIONS_FILE}")"
+  SYNC_DELETE_ORPHANS="$(jq -r 'if .sync_delete_orphans == null then false else .sync_delete_orphans end' "${OPTIONS_FILE}")"
+  SYNC_DELETE_LIMIT="$(jq -r '.sync_delete_limit // 50' "${OPTIONS_FILE}")"
 fi
 
 export OUTPUT_DIR
@@ -72,5 +78,8 @@ export FILE_STABLE_INTERVAL
 export KCC_TIMEOUT
 export NOTIFY_ON_SUCCESS
 export NOTIFY_SERVICE
+export SYNC_ON_CONVERT
+export SYNC_DELETE_ORPHANS
+export SYNC_DELETE_LIMIT
 
 exec python3 /app.py
