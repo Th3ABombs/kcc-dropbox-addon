@@ -37,6 +37,8 @@ MANGA_MODE = os.environ.get("MANGA_MODE", "true").lower() == "true"
 UPSCALE = os.environ.get("UPSCALE", "true").lower() == "true"
 STRETCH = os.environ.get("STRETCH", "false").lower() == "true"
 SOURCE_IN_TITLE = os.environ.get("SOURCE_IN_TITLE", "false").lower() == "true"
+AUTHOR = os.environ.get("AUTHOR", "").strip()
+PAD_CHAPTER_DIGITS = int(os.environ.get("PAD_CHAPTER_DIGITS", "0"))
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
 NOTIFY_SERVICE = os.environ.get("NOTIFY_SERVICE", "").strip()
@@ -289,6 +291,20 @@ def find_generated_files(output_dir: Path, before: dict):
 
     candidates.sort(key=lambda candidate: (candidate[0], candidate[1]))
     return [path for _, _, path in candidates]
+
+
+def pad_chapter_number(chapter: str, width: int) -> str:
+    # Serve solo all'ordinamento alfabetico del titolo ("Bleach 1189" verrebbe
+    # prima di "Bleach 50"). L'indice di serie resta il numero non paddato.
+    if width <= 0:
+        return chapter
+
+    match = re.fullmatch(r"([0-9]+)(\.[0-9]+)?", chapter)
+    if not match:
+        # Etichette speciali tipo "Extra 3": niente da paddare.
+        return chapter
+
+    return match.group(1).zfill(width) + (match.group(2) or "")
 
 
 def extract_source_name(file_path: Path) -> Optional[str]:
@@ -688,7 +704,7 @@ def process_file(input_path: Path):
 
     manga_name, chapter = extract_chapter_info(input_path)
     safe_manga = sanitize_filename(manga_name) or "Unknown Series"
-    safe_chapter = sanitize_filename(chapter) or "unknown"
+    safe_chapter = sanitize_filename(pad_chapter_number(chapter, PAD_CHAPTER_DIGITS)) or "unknown"
 
     # Con piu' fonti per lo stesso manga i nomi coinciderebbero e l'upload
     # successivo sovrascriverebbe il precedente: la fonte li tiene separati.
@@ -713,6 +729,11 @@ def process_file(input_path: Path):
     ]
 
     cmd.extend(KCC_FORMAT_ARGS.get(FORMAT.upper(), KCC_FORMAT_ARGS["KEPUB"]))
+
+    # Senza -a KCC scrive "KCC" come autore. Se force_creator_to_series e'
+    # attiva l'autore viene comunque riscritto con il nome della serie.
+    if AUTHOR:
+        cmd.extend(["-a", AUTHOR])
 
     if MANGA_MODE:
         cmd.append("-m")
@@ -906,6 +927,8 @@ def health():
         "upscale": UPSCALE,
         "stretch": STRETCH,
         "source_in_title": SOURCE_IN_TITLE,
+        "author": AUTHOR,
+        "pad_chapter_digits": PAD_CHAPTER_DIGITS,
         "force_creator_to_series": FORCE_CREATOR_TO_SERIES,
         "notify_on_success": NOTIFY_ON_SUCCESS,
         "notify_service": NOTIFY_SERVICE,

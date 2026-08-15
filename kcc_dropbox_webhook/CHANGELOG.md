@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.0
+- Added the `author` option, passed to KCC as `-a`. Without it KCC writes the
+  literal string `KCC` as the author, which is what shows up in the library when
+  `force_creator_to_series` is disabled. Ignored when
+  `force_creator_to_series` is enabled, since the creator is overwritten with
+  the series name.
+- Added the `pad_chapter_digits` option (default `0`, disabled). Pads the
+  chapter number in the filename and title, so that alphabetical sorting matches
+  numerical order (`Bleach 1189` would otherwise sort before `Bleach 50`).
+  The series index keeps the unpadded number, and special labels such as
+  `Extra 3` are left untouched.
+
 ## 2.3.0
 - Added the `source_in_title` option (default `false`). With multiple Suwayomi
   sources for the same manga the generated names were identical, because the

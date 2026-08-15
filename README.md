@@ -79,6 +79,8 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `upscale` | `true` | Passa `-u`: ingrandisce le pagine più piccole dello schermo mantenendo le proporzioni |
 | `stretch` | `false` | Passa `-s`: riempie esattamente lo schermo, **senza** mantenere le proporzioni |
 | `source_in_title` | `false` | Aggiunge la fonte Suwayomi a nome file e serie, evitando collisioni tra fonti diverse |
+| `author` | — | Autore passato a KCC (`-a`). Se vuoto KCC scrive `KCC`. Ignorato se `force_creator_to_series` è attiva |
+| `pad_chapter_digits` | `0` | Zero-padding del capitolo nel nome file (`4` → `Bleach 0050`). `0` disattiva |
 | `force_creator_to_series` | `false` | Scrive il nome della serie anche come autore |
 | `file_stable_timeout` | `180` | Secondi massimi di attesa della stabilità del file |
 | `file_stable_for` | `5` | Secondi di dimensione invariata richiesti |
@@ -106,7 +108,9 @@ Il firmware Kobo **non** legge i metadati di serie dai libri sideloaded: le colo
 
 Per avere il raggruppamento vero serve un mod lato dispositivo, [NickelSeries](https://pgaskin.net/kobo-mods/NickelSeries/): si copia `KoboRoot.tgz` nella cartella `.kobo` e si riavvia. Legge sia `calibre:series`/`calibre:series_index` sia i campi EPUB3 `belongs-to-collection`/`group-position` — entrambi già scritti da questo add-on, con Calibre che ha la precedenza.
 
-Con NickelSeries installato conviene rimettere `force_creator_to_series: false`, così l'autore resta corretto e il raggruppamento arriva dai metadati di serie.
+Con NickelSeries installato puoi rimettere `force_creator_to_series: false`, ma valorizza anche `author`: senza `-a` KCC scrive `KCC` come autore, quindi disattivare l'escamotage senza impostare un autore peggiora il campo invece di sistemarlo.
+
+Se il raggruppamento per serie funziona, `pad_chapter_digits` non serve: la scheda Serie ordina per numero di capitolo. Serve solo se resti sull'ordinamento alfabetico per titolo, dove `Bleach 1189` precede `Bleach 50`.
 
 ## Pagine troppo piccole sul reader
 
