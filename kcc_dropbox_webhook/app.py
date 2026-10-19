@@ -19,12 +19,35 @@ import requests
 from dropbox.files import WriteMode
 from flask import Flask, jsonify, request
 
-app = Flask(__name__)
+LOG_LEVEL_MAP = {
+    "trace": logging.DEBUG,
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "notice": logging.INFO,
+    "warning": logging.WARNING,
+    "warn": logging.WARNING,
+    "error": logging.ERROR,
+    "fatal": logging.CRITICAL,
+    "critical": logging.CRITICAL,
+}
+
+LOG_LEVEL_NAME = os.environ.get("LOG_LEVEL", "info").lower().strip()
+LOG_LEVEL = LOG_LEVEL_MAP.get(LOG_LEVEL_NAME, logging.INFO)
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s in %(module)s: %(message)s"
+    level=LOG_LEVEL,
+    format="[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+    force=True
 )
+
+app = Flask(__name__)
+app.logger.setLevel(LOG_LEVEL)
+
+werkzeug_logger = logging.getLogger("werkzeug")
+if LOG_LEVEL > logging.DEBUG:
+    werkzeug_logger.setLevel(logging.WARNING)
+else:
+    werkzeug_logger.setLevel(LOG_LEVEL)
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/share/kcc-output")
 WATCH_ROOT = os.environ.get("WATCH_ROOT", "/share/suwayomi/downloads/mangas")
@@ -372,10 +395,10 @@ def add_series_metadata_to_book(book_path: Path, series_name: str, series_index:
         or book_name_lower.endswith(".kepub")
         or book_name_lower.endswith(".kepub.epub")
     ):
-        app.logger.info("Skipping series metadata injection for unsupported file type: %s", book_path)
+        app.logger.debug("Skipping series metadata injection for unsupported file type: %s", book_path)
         return
 
-    app.logger.info(
+    app.logger.debug(
         "Injecting metadata into %s: series=%s index=%s force_creator_to_series=%s",
         book_path, series_name, series_index, FORCE_CREATOR_TO_SERIES
     )
@@ -726,14 +749,14 @@ def wait_for_file_stable(path: Path, timeout: int, stable_for: int, interval: fl
             except FileNotFoundError:
                 size = None
 
-            app.logger.info("File check: path=%s size=%s", path, size)
+            app.logger.debug("File check: path=%s size=%s", path, size)
 
             if size and size > 0:
                 if size == last_size:
                     if stable_since is None:
                         stable_since = time.time()
                     elif (time.time() - stable_since) >= stable_for:
-                        app.logger.info("File is stable: path=%s size=%s", path, size)
+                        app.logger.debug("File is stable: path=%s size=%s", path, size)
                         return size
                 else:
                     stable_since = None
@@ -771,7 +794,7 @@ def cleanup_staging_files(output_dir: Path):
             if path.is_file():
                 try:
                     path.unlink()
-                    app.logger.info("Cleaned up leftover staging file: %s", path)
+                    app.logger.debug("Cleaned up leftover staging file: %s", path)
                 except OSError:
                     pass
     except Exception:
@@ -936,9 +959,10 @@ def process_file(input_path: Path):
     cmd.append(str(input_path))
 
     result = run_kcc(cmd, timeout=KCC_TIMEOUT)
-    app.logger.info("KCC stdout: %s", result.stdout.strip())
+    if result.stdout.strip():
+        app.logger.debug("KCC stdout: %s", result.stdout.strip())
     if result.stderr.strip():
-        app.logger.info("KCC stderr: %s", result.stderr.strip())
+        app.logger.debug("KCC stderr: %s", result.stderr.strip())
 
     generated_files = find_generated_files(output_path, before_outputs)
 
@@ -947,7 +971,7 @@ def process_file(input_path: Path):
         # timestamp a grana grossa: lo stato del file puo' non essere cambiato.
         fallback = output_path / f"{title}{expected_extension_for_format()}"
         if fallback.is_file():
-            app.logger.info("No output change detected, using expected name: %s", fallback)
+            app.logger.debug("No output change detected, using expected name: %s", fallback)
             generated_files = [fallback]
 
     if not generated_files:
@@ -958,7 +982,7 @@ def process_file(input_path: Path):
     # KCC puo' spezzare un volume in piu' file: vanno caricati tutti.
     multiple_outputs = len(generated_files) > 1
     if multiple_outputs:
-        app.logger.info("KCC produced %s output files", len(generated_files))
+        app.logger.debug("KCC produced %s output files", len(generated_files))
 
     # Prima tutti gli output vengono spostati su nomi univoci: cosi' il nome
     # finale di un file non puo' sovrascriverne un altro ancora da elaborare.
@@ -992,7 +1016,7 @@ def process_file(input_path: Path):
             if not KEEP_LOCAL_OUTPUTS:
                 try:
                     final_local.unlink()
-                    app.logger.info("Removed local output after upload: %s", final_local)
+                    app.logger.debug("Removed local output after upload: %s", final_local)
                 except OSError:
                     app.logger.exception("Failed to remove local output: %s", final_local)
     finally:
@@ -1000,7 +1024,7 @@ def process_file(input_path: Path):
             if staging_path.exists():
                 try:
                     staging_path.unlink()
-                    app.logger.info("Cleaned up unhandled staging file: %s", staging_path)
+                    app.logger.debug("Cleaned up unhandled staging file: %s", staging_path)
                 except OSError:
                     pass
         cleanup_kcc_temp()
@@ -1185,7 +1209,7 @@ def run_sync(dry_run: bool = False, force: bool = False) -> Optional[dict]:
 
 
 def worker():
-    app.logger.info("Background worker started")
+    app.logger.info("Background worker started (log_level=%s)", LOG_LEVEL_NAME)
     while True:
         job_id = task_queue.get()
         try:
@@ -1328,6 +1352,7 @@ def health():
         "queue_size": task_queue.qsize(),
         "jobs": queue_counts,
         "worker_alive": worker_thread.is_alive(),
+        "log_level": LOG_LEVEL_NAME,
     }
     return jsonify(status)
 

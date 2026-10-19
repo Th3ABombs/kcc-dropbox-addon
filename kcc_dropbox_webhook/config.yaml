@@ -1,5 +1,5 @@
 name: "KCC Dropbox Webhook"
-version: "2.6.2"
+version: "2.6.3"
 slug: "kcc_dropbox_webhook"
 description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
 url: "https://github.com/Th3ABombs/kcc-dropbox-addon/tree/main/kcc_dropbox_webhook"
@@ -26,6 +26,7 @@ ports_description:
 webui: "http://[HOST]:[PORT:5005]/health"
 
 options:
+  log_level: "info"
   output_dir: "/share/kcc-output"
   watch_root: "/share/suwayomi/downloads/mangas"
   dropbox_folder: "/Applicazioni/Kobo Cloud Sync"
@@ -54,6 +55,7 @@ options:
   max_job_history: 100
 
 schema:
+  log_level: list(trace|debug|info|warning|error)
   output_dir: str
   watch_root: str
   dropbox_folder: str

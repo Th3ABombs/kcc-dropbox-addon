@@ -29,8 +29,10 @@ SYNC_DELETE_ORPHANS="false"
 SYNC_DELETE_LIMIT="50"
 KEEP_LOCAL_OUTPUTS="false"
 MAX_JOB_HISTORY="100"
+LOG_LEVEL="info"
 
 if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
+  LOG_LEVEL="$(jq -r '.log_level // "info"' "${OPTIONS_FILE}")"
   OUTPUT_DIR="$(jq -r '.output_dir // "/share/kcc-output"' "${OPTIONS_FILE}")"
   WATCH_ROOT="$(jq -r '.watch_root // "/share/suwayomi/downloads/mangas"' "${OPTIONS_FILE}")"
   DROPBOX_FOLDER="$(jq -r '.dropbox_folder // "/Applicazioni/Kobo Cloud Sync"' "${OPTIONS_FILE}")"
@@ -87,5 +89,6 @@ export SYNC_DELETE_ORPHANS
 export SYNC_DELETE_LIMIT
 export KEEP_LOCAL_OUTPUTS
 export MAX_JOB_HISTORY
+export LOG_LEVEL
 
 exec python3 /app.py

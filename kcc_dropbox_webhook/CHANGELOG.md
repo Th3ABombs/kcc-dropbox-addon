@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.6.3
+- Added `log_level` configuration option (`trace`, `debug`, `info`, `warning`, `error`, default: `info`).
+- Reduced default log verbosity at `info` level:
+  - Repetitive file stability polling checks and internal cleanup events now log at `debug`.
+  - Full KCC command stdout/stderr on successful conversions now log at `debug` (failures and timeouts still log at `error` level).
+  - Werkzeug HTTP access logs silenced at `info` level to prevent log pollution from health-checks and status polls.
+- Exposed `log_level` in `/health` endpoint.
+
 ## 2.6.2
 - Fixed `ImportError: libglib-2.0.so.0: cannot open shared object file` by installing
   `libglib2.0-0`, `libgl1`, `libegl1`, `libdbus-1-3`, `libfontconfig1`, `libxext6`,

@@ -98,6 +98,7 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 
 | Opzione | Default | Descrizione |
 | --- | --- | --- |
+| `log_level` | `info` | Livello di log: `trace`, `debug`, `info`, `warning`, `error` |
 | `output_dir` | `/share/kcc-output` | Cartella di lavoro per i file convertiti |
 | `watch_root` | `/share/suwayomi/downloads/mangas` | I file fuori da questa cartella vengono rifiutati |
 | `dropbox_folder` | `/Applicazioni/Kobo Cloud Sync` | Cartella Dropbox di destinazione |
