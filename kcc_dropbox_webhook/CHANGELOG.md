@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.6.0
+- Added the `keep_local_outputs` option (default `false`): automatically removes
+  converted book files from `output_dir` after a successful upload to Dropbox,
+  preventing unbounded disk space accumulation in `/share`.
+- Added isolated temporary directories (`TMPDIR`) per KCC conversion process,
+  ensuring all extracted images and temp files are cleanly purged even if KCC
+  crashes or times out.
+- Automatic cleanup of leftover `.staging-*` files in `output_dir` at startup
+  and via `finally` blocks during conversion errors.
+- Added cleanup of local orphan files in `output_dir` during `/sync` when
+  `sync_delete_orphans` is enabled.
+- Added `max_job_history` option (default `100`) and job history pruning to prevent
+  unbounded memory growth in the Flask process.
+
 ## 2.5.0
 - Added `POST /sync`, which reconciles the local Suwayomi folder with the
   Dropbox folder: chapters with no uploaded counterpart are queued for

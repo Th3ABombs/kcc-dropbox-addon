@@ -9,7 +9,8 @@ Dropbox.
 Le credenziali Dropbox (`dropbox_app_key`, `dropbox_app_secret`,
 `dropbox_refresh_token`) sono obbligatorie: senza di esse la conversione va a
 buon fine ma l'upload fallisce. `watch_root` delimita i path accettati,
-`output_dir` è la cartella di lavoro dei file convertiti.
+`output_dir` è la cartella di lavoro dei file convertiti (che vengono eliminati
+automaticamente dopo l'upload su Dropbox a meno che `keep_local_outputs` non sia impostato su `true`).
 
 Per le notifiche imposta `notify_on_success: true` e `notify_service` con un
 servizio `notify.*` (es. `notify.mobile_app_pixel`).

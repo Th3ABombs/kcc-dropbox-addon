@@ -27,6 +27,8 @@ NOTIFY_SERVICE=""
 SYNC_ON_CONVERT="false"
 SYNC_DELETE_ORPHANS="false"
 SYNC_DELETE_LIMIT="50"
+KEEP_LOCAL_OUTPUTS="false"
+MAX_JOB_HISTORY="100"
 
 if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   OUTPUT_DIR="$(jq -r '.output_dir // "/share/kcc-output"' "${OPTIONS_FILE}")"
@@ -55,6 +57,8 @@ if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   SYNC_ON_CONVERT="$(jq -r 'if .sync_on_convert == null then false else .sync_on_convert end' "${OPTIONS_FILE}")"
   SYNC_DELETE_ORPHANS="$(jq -r 'if .sync_delete_orphans == null then false else .sync_delete_orphans end' "${OPTIONS_FILE}")"
   SYNC_DELETE_LIMIT="$(jq -r '.sync_delete_limit // 50' "${OPTIONS_FILE}")"
+  KEEP_LOCAL_OUTPUTS="$(jq -r 'if .keep_local_outputs == null then false else .keep_local_outputs end' "${OPTIONS_FILE}")"
+  MAX_JOB_HISTORY="$(jq -r '.max_job_history // 100' "${OPTIONS_FILE}")"
 fi
 
 export OUTPUT_DIR
@@ -81,5 +85,7 @@ export NOTIFY_SERVICE
 export SYNC_ON_CONVERT
 export SYNC_DELETE_ORPHANS
 export SYNC_DELETE_LIMIT
+export KEEP_LOCAL_OUTPUTS
+export MAX_JOB_HISTORY
 
 exec python3 /app.py

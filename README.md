@@ -122,6 +122,8 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `sync_on_convert` | `false` | Riconcilia con Dropbox dopo ogni conversione dal webhook |
 | `sync_delete_orphans` | `false` | Permette alla sincronizzazione di cancellare da Dropbox i file senza capitolo locale |
 | `sync_delete_limit` | `50` | Oltre questo numero di orfani la cancellazione viene saltata, salvo `force` |
+| `keep_local_outputs` | `false` | Se `false`, elimina il file convertito da `output_dir` dopo l'upload riuscito su Dropbox per evitare l'accumulo infinito di spazio su disco |
+| `max_job_history` | `100` | Numero massimo di job completati o falliti mantenuti in memoria (previene memory leak) |
 
 ## Più fonti per lo stesso manga
 
@@ -141,6 +143,8 @@ L'indice di capitolo resta numerico, quindi l'ordinamento dentro ogni serie è i
 Il firmware Kobo **non** legge i metadati di serie dai libri sideloaded: le colonne `Series` del database vengono popolate solo per i libri acquistati dallo store. Per questo l'add-on scrive comunque i metadati corretti, ma il Kobo da solo li ignora — da cui l'esistenza di `force_creator_to_series`, che usa il campo autore come raggruppamento di fortuna.
 
 Per avere il raggruppamento vero serve un mod lato dispositivo, [NickelSeries](https://pgaskin.net/kobo-mods/NickelSeries/): si copia `KoboRoot.tgz` nella cartella `.kobo` e si riavvia. Legge sia `calibre:series`/`calibre:series_index` sia i campi EPUB3 `belongs-to-collection`/`group-position` — entrambi già scritti da questo add-on, con Calibre che ha la precedenza.
+
+Funziona anche con i file che non arrivano da USB: l'hook è su `EPubParser::parse`, cioè sul parser dei metadati, quindi vale per qualunque libro che nickel analizza. Verificato con una libreria sincronizzata via KoboCloud, dove il rescan finale (`qndb ... pfmRescanBooksFull`) è sufficiente a far agganciare i metadati.
 
 Con NickelSeries installato puoi rimettere `force_creator_to_series: false`, ma valorizza anche `author`: senza `-a` KCC scrive `KCC` come autore, quindi disattivare l'escamotage senza impostare un autore peggiora il campo invece di sistemarlo.
 

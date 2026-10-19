@@ -43,6 +43,8 @@ PAD_CHAPTER_DIGITS = int(os.environ.get("PAD_CHAPTER_DIGITS", "0"))
 SYNC_ON_CONVERT = os.environ.get("SYNC_ON_CONVERT", "false").lower() == "true"
 SYNC_DELETE_ORPHANS = os.environ.get("SYNC_DELETE_ORPHANS", "false").lower() == "true"
 SYNC_DELETE_LIMIT = int(os.environ.get("SYNC_DELETE_LIMIT", "50"))
+KEEP_LOCAL_OUTPUTS = os.environ.get("KEEP_LOCAL_OUTPUTS", "false").lower() == "true"
+MAX_JOB_HISTORY = int(os.environ.get("MAX_JOB_HISTORY", "100"))
 STATE_DIR = os.environ.get("STATE_DIR", "/data")
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
@@ -742,15 +744,44 @@ def wait_for_file_stable(path: Path, timeout: int, stable_for: int, interval: fl
     raise TimeoutError(f"file not stable within {timeout}s: {path}")
 
 
-def run_kcc(cmd, timeout):
+def run_kcc(cmd, timeout, env=None):
     app.logger.info("Running KCC command: %s", cmd)
     return subprocess.run(
         cmd,
         check=True,
         capture_output=True,
         text=True,
-        timeout=timeout
+        timeout=timeout,
+        env=env,
     )
+
+
+def cleanup_staging_files(output_dir: Path):
+    try:
+        if not output_dir.is_dir():
+            return
+        for path in output_dir.glob(".staging-*"):
+            if path.is_file():
+                try:
+                    path.unlink()
+                    app.logger.info("Cleaned up leftover staging file: %s", path)
+                except OSError:
+                    pass
+    except Exception:
+        app.logger.exception("Error cleaning up staging files in %s", output_dir)
+
+
+def prune_jobs_locked():
+    finished = [
+        (job.get("finished_at") or job["created_at"], job_id)
+        for job_id, job in jobs.items()
+        if job["status"] in ("done", "error")
+    ]
+    if len(finished) > MAX_JOB_HISTORY:
+        finished.sort(key=lambda item: item[0])
+        excess = len(finished) - MAX_JOB_HISTORY
+        for _, job_id in finished[:excess]:
+            del jobs[job_id]
 
 
 def utc_now():
@@ -800,6 +831,8 @@ def set_job_status(job_id, status, **extra):
             return
         job["status"] = status
         job.update(extra)
+        if status in ("done", "error"):
+            prune_jobs_locked()
 
 
 def process_file(input_path: Path):
@@ -853,7 +886,11 @@ def process_file(input_path: Path):
 
     cmd.append(str(input_path))
 
-    result = run_kcc(cmd, timeout=KCC_TIMEOUT)
+    with tempfile.TemporaryDirectory(prefix="kcc_run_") as temp_run_dir:
+        kcc_env = os.environ.copy()
+        kcc_env["TMPDIR"] = temp_run_dir
+        result = run_kcc(cmd, timeout=KCC_TIMEOUT, env=kcc_env)
+
     app.logger.info("KCC stdout: %s", result.stdout.strip())
     if result.stderr.strip():
         app.logger.info("KCC stderr: %s", result.stderr.strip())
@@ -881,30 +918,46 @@ def process_file(input_path: Path):
     # Prima tutti gli output vengono spostati su nomi univoci: cosi' il nome
     # finale di un file non puo' sovrascriverne un altro ancora da elaborare.
     staged = []
-    for index, generated in enumerate(generated_files, start=1):
-        part_suffix = f" Part {index}" if multiple_outputs else ""
-        final_name = f"{title}{part_suffix}{output_extension(generated)}"
-        staging_path = output_path / f".staging-{uuid.uuid4().hex}"
-        shutil.move(str(generated), str(staging_path))
-        staged.append((staging_path, final_name))
-
     local_outputs = []
     remote_paths = []
 
-    for staging_path, final_name in staged:
-        final_local = output_path / final_name
+    try:
+        for index, generated in enumerate(generated_files, start=1):
+            part_suffix = f" Part {index}" if multiple_outputs else ""
+            final_name = f"{title}{part_suffix}{output_extension(generated)}"
+            staging_path = output_path / f".staging-{uuid.uuid4().hex}"
+            shutil.move(str(generated), str(staging_path))
+            staged.append((staging_path, final_name))
 
-        if final_local.exists():
-            final_local.unlink()
-        shutil.move(str(staging_path), str(final_local))
+        for staging_path, final_name in staged:
+            final_local = output_path / final_name
 
-        add_series_metadata_to_book(final_local, series_name, series_index)
+            if final_local.exists():
+                final_local.unlink()
+            shutil.move(str(staging_path), str(final_local))
 
-        remote_path = upload_to_dropbox(final_local, final_name)
-        record_upload(final_name, input_path)
+            add_series_metadata_to_book(final_local, series_name, series_index)
 
-        local_outputs.append(str(final_local))
-        remote_paths.append(remote_path)
+            remote_path = upload_to_dropbox(final_local, final_name)
+            record_upload(final_name, input_path)
+
+            local_outputs.append(str(final_local))
+            remote_paths.append(remote_path)
+
+            if not KEEP_LOCAL_OUTPUTS:
+                try:
+                    final_local.unlink()
+                    app.logger.info("Removed local output after upload: %s", final_local)
+                except OSError:
+                    app.logger.exception("Failed to remove local output: %s", final_local)
+    finally:
+        for staging_path, _ in staged:
+            if staging_path.exists():
+                try:
+                    staging_path.unlink()
+                    app.logger.info("Cleaned up unhandled staging file: %s", staging_path)
+                except OSError:
+                    pass
 
     return {
         "input_file": str(input_path),
@@ -945,6 +998,7 @@ def enqueue_job(input_path: Path, origin: str = "webhook") -> dict:
 
     with jobs_lock:
         jobs[job_id] = job
+        prune_jobs_locked()
 
     task_queue.put(job_id)
     return job
@@ -1015,6 +1069,7 @@ def reconcile(dry_run: bool = False, force: bool = False) -> dict:
                     f"use force to override"
                 )
             else:
+                output_path = Path(OUTPUT_DIR)
                 for name in orphans:
                     try:
                         delete_from_dropbox(remote_files[name])
@@ -1024,6 +1079,14 @@ def reconcile(dry_run: bool = False, force: bool = False) -> dict:
                     deleted.append(name)
                     del registry[name]
                     registry_changed = True
+
+                    local_orphan = output_path / name
+                    if local_orphan.is_file():
+                        try:
+                            local_orphan.unlink()
+                            app.logger.info("Deleted local orphan: %s", local_orphan)
+                        except OSError:
+                            app.logger.exception("Unable to delete local orphan: %s", local_orphan)
 
         if registry_changed and not dry_run:
             save_registry(registry)
@@ -1162,6 +1225,7 @@ def worker():
             task_queue.task_done()
 
 
+cleanup_staging_files(Path(OUTPUT_DIR))
 worker_thread = threading.Thread(target=worker, daemon=True)
 worker_thread.start()
 
@@ -1193,6 +1257,8 @@ def health():
         "sync_on_convert": SYNC_ON_CONVERT,
         "sync_delete_orphans": SYNC_DELETE_ORPHANS,
         "sync_delete_limit": SYNC_DELETE_LIMIT,
+        "keep_local_outputs": KEEP_LOCAL_OUTPUTS,
+        "max_job_history": MAX_JOB_HISTORY,
         "tracked_uploads": len(load_registry()),
         "kcc_timeout": KCC_TIMEOUT,
         "file_stable_timeout": FILE_STABLE_TIMEOUT,
