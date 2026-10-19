@@ -744,16 +744,23 @@ def wait_for_file_stable(path: Path, timeout: int, stable_for: int, interval: fl
     raise TimeoutError(f"file not stable within {timeout}s: {path}")
 
 
-def run_kcc(cmd, timeout, env=None):
+def run_kcc(cmd, timeout):
     app.logger.info("Running KCC command: %s", cmd)
-    return subprocess.run(
-        cmd,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+    except subprocess.CalledProcessError as exc:
+        app.logger.error("KCC command failed (code %s): %s", exc.returncode, cmd)
+        if exc.stdout and exc.stdout.strip():
+            app.logger.error("KCC stdout:\n%s", exc.stdout.strip())
+        if exc.stderr and exc.stderr.strip():
+            app.logger.error("KCC stderr:\n%s", exc.stderr.strip())
+        raise
 
 
 def cleanup_staging_files(output_dir: Path):
@@ -769,6 +776,48 @@ def cleanup_staging_files(output_dir: Path):
                     pass
     except Exception:
         app.logger.exception("Error cleaning up staging files in %s", output_dir)
+
+
+def cleanup_kcc_temp():
+    try:
+        tmp = Path(tempfile.gettempdir())
+        for pattern in ("KCC-*", "LLL-*"):
+            for p in tmp.glob(pattern):
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                elif p.is_file():
+                    p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def cleanup_already_uploaded_outputs(output_dir: Path):
+    if KEEP_LOCAL_OUTPUTS:
+        return
+    try:
+        registry = load_registry()
+        if not output_dir.is_dir():
+            return
+        freed_bytes = 0
+        count = 0
+        for path in output_dir.iterdir():
+            if not path.is_file():
+                continue
+            if path.name in registry:
+                try:
+                    size = path.stat().st_size
+                    path.unlink()
+                    freed_bytes += size
+                    count += 1
+                except OSError:
+                    pass
+        if count > 0:
+            app.logger.info(
+                "Cleaned up %d already-uploaded files from %s (freed %.2f MB)",
+                count, output_dir, freed_bytes / (1024 * 1024)
+            )
+    except Exception:
+        app.logger.exception("Error cleaning up already-uploaded files in %s", output_dir)
 
 
 def prune_jobs_locked():
@@ -886,11 +935,7 @@ def process_file(input_path: Path):
 
     cmd.append(str(input_path))
 
-    with tempfile.TemporaryDirectory(prefix="kcc_run_") as temp_run_dir:
-        kcc_env = os.environ.copy()
-        kcc_env["TMPDIR"] = temp_run_dir
-        result = run_kcc(cmd, timeout=KCC_TIMEOUT, env=kcc_env)
-
+    result = run_kcc(cmd, timeout=KCC_TIMEOUT)
     app.logger.info("KCC stdout: %s", result.stdout.strip())
     if result.stderr.strip():
         app.logger.info("KCC stderr: %s", result.stderr.strip())
@@ -958,6 +1003,7 @@ def process_file(input_path: Path):
                     app.logger.info("Cleaned up unhandled staging file: %s", staging_path)
                 except OSError:
                     pass
+        cleanup_kcc_temp()
 
     return {
         "input_file": str(input_path),
@@ -1119,6 +1165,9 @@ def reconcile(dry_run: bool = False, force: bool = False) -> dict:
         len(deleted), delete_skipped
     )
 
+    if not dry_run:
+        cleanup_already_uploaded_outputs(Path(OUTPUT_DIR))
+
     return summary
 
 
@@ -1177,7 +1226,12 @@ def worker():
             app.logger.info("Job %s completed", job_id)
 
         except subprocess.TimeoutExpired as exc:
-            app.logger.exception("KCC timed out for job %s", job_id)
+            app.logger.error("KCC timed out for job %s after %ss", job_id, KCC_TIMEOUT)
+            if exc.stdout and str(exc.stdout).strip():
+                app.logger.error("KCC stdout for job %s:\n%s", job_id, str(exc.stdout).strip())
+            if exc.stderr and str(exc.stderr).strip():
+                app.logger.error("KCC stderr for job %s:\n%s", job_id, str(exc.stderr).strip())
+            app.logger.exception("Timeout details for job %s", job_id)
             set_job_status(
                 job_id,
                 "error",
@@ -1189,7 +1243,12 @@ def worker():
                 }
             )
         except subprocess.CalledProcessError as exc:
-            app.logger.exception("KCC failed for job %s", job_id)
+            app.logger.error("KCC failed for job %s (exit code %s)", job_id, exc.returncode)
+            if exc.stdout and str(exc.stdout).strip():
+                app.logger.error("KCC stdout for job %s:\n%s", job_id, str(exc.stdout).strip())
+            if exc.stderr and str(exc.stderr).strip():
+                app.logger.error("KCC stderr for job %s:\n%s", job_id, str(exc.stderr).strip())
+            app.logger.exception("KCC error details for job %s", job_id)
             set_job_status(
                 job_id,
                 "error",
@@ -1226,6 +1285,8 @@ def worker():
 
 
 cleanup_staging_files(Path(OUTPUT_DIR))
+cleanup_already_uploaded_outputs(Path(OUTPUT_DIR))
+cleanup_kcc_temp()
 worker_thread = threading.Thread(target=worker, daemon=True)
 worker_thread.start()
 

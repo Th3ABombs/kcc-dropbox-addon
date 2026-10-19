@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.6.1
+- Logged KCC stdout and stderr output on conversion errors and timeouts so the
+  exact reason for conversion failures is immediately visible in the logs.
+- Added automatic cleanup of previously-uploaded files from `output_dir` at
+  startup and during `/sync` when `keep_local_outputs: false`, freeing up space
+  occupied by older add-on versions.
+- Reverted isolated `TMPDIR` override for KCC subprocess in favor of safe external
+  cleanup of temporary folders in `/tmp`.
+
 ## 2.6.0
 - Added the `keep_local_outputs` option (default `false`): automatically removes
   converted book files from `output_dir` after a successful upload to Dropbox,
