@@ -2,21 +2,29 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
+ENV QT_QPA_PLATFORM=offscreen
 
 WORKDIR /opt
 
-# jq serve a run.sh, p7zip-full serve a KCC per gli archivi CBR/CB7: restano.
+# jq serve a run.sh, p7zip-full serve a KCC per gli archivi CBR/CB7.
+# libglib2.0-0, libgl1, libegl1, libdbus-1-3, libfontconfig1 e libx* servono al runtime Qt di PySide6 (usato da KCC).
+# libjpeg-dev e libpng-dev tengono installate le librerie runtime grafiche.
 # git, build-essential e python3-dev servono solo durante la build e vengono
 # rimossi nello stesso layer: un purge in un RUN successivo non ridurrebbe la
 # dimensione finale dell'immagine.
-# libjpeg-dev e libpng-dev restano di proposito: sono pochi KB e tengono
-# installate le librerie runtime corrette senza doverne fissare il nome, che
-# cambia tra le release di Debian.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         jq \
         p7zip-full \
+        libglib2.0-0 \
+        libgl1 \
+        libegl1 \
+        libdbus-1-3 \
+        libfontconfig1 \
+        libxext6 \
+        libxrender1 \
+        libxi6 \
         libjpeg-dev \
         libpng-dev \
         git \

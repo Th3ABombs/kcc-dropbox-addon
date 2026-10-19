@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.6.2
+- Fixed `ImportError: libglib-2.0.so.0: cannot open shared object file` by installing
+  `libglib2.0-0`, `libgl1`, `libegl1`, `libdbus-1-3`, `libfontconfig1`, `libxext6`,
+  `libxrender1` and `libxi6` in the Docker image, which are required by PySide6
+  (used by KCC for translations and Qt runtime).
+- Set `QT_QPA_PLATFORM=offscreen` to ensure Qt operates cleanly in headless Docker containers.
+
 ## 2.6.1
 - Logged KCC stdout and stderr output on conversion errors and timeouts so the
   exact reason for conversion failures is immediately visible in the logs.
