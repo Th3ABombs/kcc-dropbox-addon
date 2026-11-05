@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.7.1
+- Fixed Suwayomi chapter lookup for manga with many chapters (e.g. Bleach, One Piece):
+  - Added native REST API `/api/v1/manga/{id}/chapters` retrieval to bypass GraphQL connection page limits.
+  - Added `first: 10000` pagination parameter to GraphQL fallbacks.
+  - Multi-candidate manga search: iterates through all matching manga entries in Suwayomi to find the correct series.
+  - Robust chapter name matching: extracts chapter numbers and labels from full Italian titles (e.g. `Capitolo 272 - Titolo`).
+  - Added detailed INFO logging showing matched manga ID and title.
+
 ## 2.7.0
 - Added optional Suwayomi integration to automatically mark converted chapters as read (`isRead: true`) on Suwayomi after a successful upload to Dropbox (`suwayomi_mark_read`, default `false`).
 - Added configuration options: `suwayomi_url`, `suwayomi_username`, `suwayomi_password`, and `suwayomi_token` (supports unauthenticated, HTTP Basic Auth, and JWT `ui_login`).
