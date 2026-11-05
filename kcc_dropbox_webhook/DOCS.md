@@ -15,6 +15,11 @@ automaticamente dopo l'upload su Dropbox a meno che `keep_local_outputs` non sia
 Per le notifiche imposta `notify_on_success: true` e `notify_service` con un
 servizio `notify.*` (es. `notify.mobile_app_pixel`).
 
+Per segnare automaticamente i capitoli come letti su Suwayomi al termine dell'upload
+su Dropbox, abilita `suwayomi_mark_read: true` e imposta `suwayomi_url` (es.
+`http://homeassistant.local:4567`), con credenziali opzionali (`suwayomi_username`/`suwayomi_password`
+o `suwayomi_token`). I file scaricati su Suwayomi restano intatti e non vengono cancellati.
+
 L'elenco completo delle opzioni è nel README del repository.
 
 ### Pagine troppo piccole sul reader

@@ -125,6 +125,11 @@ Se KCC divide la conversione in più file, questi vengono caricati tutti con il 
 | `sync_delete_limit` | `50` | Oltre questo numero di orfani la cancellazione viene saltata, salvo `force` |
 | `keep_local_outputs` | `false` | Se `false`, elimina il file convertito da `output_dir` dopo l'upload riuscito su Dropbox per evitare l'accumulo infinito di spazio su disco |
 | `max_job_history` | `100` | Numero massimo di job completati o falliti mantenuti in memoria (previene memory leak) |
+| `suwayomi_mark_read` | `false` | Se `true`, segna automaticamente il capitolo come letto su Suwayomi dopo il caricamento su Dropbox |
+| `suwayomi_url` | — | URL del server Suwayomi (es. `http://homeassistant.local:4567` o `http://192.168.1.50:4567`) |
+| `suwayomi_username` | — | Username per l'accesso a Suwayomi (opzionale) |
+| `suwayomi_password` | — | Password per l'accesso a Suwayomi (opzionale) |
+| `suwayomi_token` | — | Token Bearer/JWT per l'accesso a Suwayomi (opzionale) |
 
 ## Più fonti per lo stesso manga
 

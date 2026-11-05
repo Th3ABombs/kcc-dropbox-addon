@@ -1,5 +1,5 @@
 name: "KCC Dropbox Webhook"
-version: "2.6.3"
+version: "2.7.0"
 slug: "kcc_dropbox_webhook"
 description: "Convert Suwayomi downloads with KCC and upload to Dropbox"
 url: "https://github.com/Th3ABombs/kcc-dropbox-addon/tree/main/kcc_dropbox_webhook"
@@ -53,6 +53,11 @@ options:
   sync_delete_limit: 50
   keep_local_outputs: false
   max_job_history: 100
+  suwayomi_mark_read: false
+  suwayomi_url: ""
+  suwayomi_username: ""
+  suwayomi_password: ""
+  suwayomi_token: ""
 
 schema:
   log_level: list(trace|debug|info|warning|error)
@@ -82,3 +87,8 @@ schema:
   sync_delete_limit: int(0,10000)
   keep_local_outputs: bool
   max_job_history: int(10,5000)
+  suwayomi_mark_read: bool
+  suwayomi_url: str?
+  suwayomi_username: str?
+  suwayomi_password: password?
+  suwayomi_token: password?

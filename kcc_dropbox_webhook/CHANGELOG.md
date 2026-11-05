@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.7.0
+- Added optional Suwayomi integration to automatically mark converted chapters as read (`isRead: true`) on Suwayomi after a successful upload to Dropbox (`suwayomi_mark_read`, default `false`).
+- Added configuration options: `suwayomi_url`, `suwayomi_username`, `suwayomi_password`, and `suwayomi_token` (supports unauthenticated, HTTP Basic Auth, and JWT `ui_login`).
+- Guaranteed safety: local manga chapter downloads on Suwayomi are never deleted by this add-on, preventing unwanted sync deletions on Dropbox.
+- Added Suwayomi status reporting in job serialization and the `/health` endpoint.
+
 ## 2.6.3
 - Added `log_level` configuration option (`trace`, `debug`, `info`, `warning`, `error`, default: `info`).
 - Reduced default log verbosity at `info` level:

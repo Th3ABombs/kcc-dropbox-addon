@@ -30,6 +30,11 @@ SYNC_DELETE_LIMIT="50"
 KEEP_LOCAL_OUTPUTS="false"
 MAX_JOB_HISTORY="100"
 LOG_LEVEL="info"
+SUWAYOMI_MARK_READ="false"
+SUWAYOMI_URL=""
+SUWAYOMI_USERNAME=""
+SUWAYOMI_PASSWORD=""
+SUWAYOMI_TOKEN=""
 
 if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   LOG_LEVEL="$(jq -r '.log_level // "info"' "${OPTIONS_FILE}")"
@@ -61,6 +66,11 @@ if [ -f "${OPTIONS_FILE}" ] && command -v jq >/dev/null 2>&1; then
   SYNC_DELETE_LIMIT="$(jq -r '.sync_delete_limit // 50' "${OPTIONS_FILE}")"
   KEEP_LOCAL_OUTPUTS="$(jq -r 'if .keep_local_outputs == null then false else .keep_local_outputs end' "${OPTIONS_FILE}")"
   MAX_JOB_HISTORY="$(jq -r '.max_job_history // 100' "${OPTIONS_FILE}")"
+  SUWAYOMI_MARK_READ="$(jq -r 'if .suwayomi_mark_read == null then false else .suwayomi_mark_read end' "${OPTIONS_FILE}")"
+  SUWAYOMI_URL="$(jq -r '.suwayomi_url // ""' "${OPTIONS_FILE}")"
+  SUWAYOMI_USERNAME="$(jq -r '.suwayomi_username // ""' "${OPTIONS_FILE}")"
+  SUWAYOMI_PASSWORD="$(jq -r '.suwayomi_password // ""' "${OPTIONS_FILE}")"
+  SUWAYOMI_TOKEN="$(jq -r '.suwayomi_token // ""' "${OPTIONS_FILE}")"
 fi
 
 export OUTPUT_DIR
@@ -90,5 +100,10 @@ export SYNC_DELETE_LIMIT
 export KEEP_LOCAL_OUTPUTS
 export MAX_JOB_HISTORY
 export LOG_LEVEL
+export SUWAYOMI_MARK_READ
+export SUWAYOMI_URL
+export SUWAYOMI_USERNAME
+export SUWAYOMI_PASSWORD
+export SUWAYOMI_TOKEN
 
 exec python3 /app.py

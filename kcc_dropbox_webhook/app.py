@@ -72,6 +72,11 @@ STATE_DIR = os.environ.get("STATE_DIR", "/data")
 FORCE_CREATOR_TO_SERIES = os.environ.get("FORCE_CREATOR_TO_SERIES", "false").lower() == "true"
 NOTIFY_ON_SUCCESS = os.environ.get("NOTIFY_ON_SUCCESS", "false").lower() == "true"
 NOTIFY_SERVICE = os.environ.get("NOTIFY_SERVICE", "").strip()
+SUWAYOMI_MARK_READ = os.environ.get("SUWAYOMI_MARK_READ", "false").lower() == "true"
+SUWAYOMI_URL = os.environ.get("SUWAYOMI_URL", "").strip().rstrip("/")
+SUWAYOMI_USERNAME = os.environ.get("SUWAYOMI_USERNAME", "").strip()
+SUWAYOMI_PASSWORD = os.environ.get("SUWAYOMI_PASSWORD", "")
+SUWAYOMI_TOKEN = os.environ.get("SUWAYOMI_TOKEN", "").strip()
 
 KCC_TIMEOUT = int(os.environ.get("KCC_TIMEOUT", "1800"))
 FILE_STABLE_TIMEOUT = int(os.environ.get("FILE_STABLE_TIMEOUT", "180"))
@@ -717,6 +722,227 @@ def notify_home_assistant_success(result: dict):
     response.raise_for_status()
 
 
+_suwayomi_token: Optional[str] = None
+
+
+def _execute_suwayomi_graphql(query: str, variables: Optional[dict] = None) -> dict:
+    global _suwayomi_token
+    graphql_url = f"{SUWAYOMI_URL}/api/graphql"
+
+    def build_headers_and_auth():
+        headers = {"Content-Type": "application/json"}
+        auth = None
+        if SUWAYOMI_TOKEN:
+            headers["Authorization"] = f"Bearer {SUWAYOMI_TOKEN}"
+        elif SUWAYOMI_USERNAME and SUWAYOMI_PASSWORD:
+            if _suwayomi_token:
+                headers["Authorization"] = f"Bearer {_suwayomi_token}"
+            else:
+                auth = (SUWAYOMI_USERNAME, SUWAYOMI_PASSWORD)
+        return headers, auth
+
+    headers, auth = build_headers_and_auth()
+    payload = {"query": query}
+    if variables:
+        payload["variables"] = variables
+
+    resp = requests.post(graphql_url, json=payload, headers=headers, auth=auth, timeout=15)
+
+    # In caso di 401/403 e presenza di username/password (senza token fisso),
+    # prova la mutazione di login per ottenere un JWT valido (modalita' ui_login).
+    if resp.status_code in (401, 403) and SUWAYOMI_USERNAME and SUWAYOMI_PASSWORD and not SUWAYOMI_TOKEN:
+        _suwayomi_token = None
+        try:
+            login_query = """
+            mutation Login($username: String!, $password: String!) {
+              login(username: $username, password: $password) {
+                accessToken
+              }
+            }
+            """
+            login_resp = requests.post(
+                graphql_url,
+                json={"query": login_query, "variables": {"username": SUWAYOMI_USERNAME, "password": SUWAYOMI_PASSWORD}},
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            if login_resp.status_code == 200:
+                data = login_resp.json()
+                token = (data.get("data") or {}).get("login", {}).get("accessToken")
+                if token:
+                    _suwayomi_token = token
+                    headers["Authorization"] = f"Bearer {_suwayomi_token}"
+                    resp = requests.post(graphql_url, json=payload, headers=headers, timeout=15)
+        except Exception as exc:
+            app.logger.debug("Suwayomi login mutation attempt failed: %s", exc)
+
+    resp.raise_for_status()
+    result = resp.json()
+    if "errors" in result and result["errors"]:
+        raise RuntimeError(f"GraphQL errors: {result['errors']}")
+    return result.get("data") or {}
+
+
+def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name: Optional[str] = None) -> dict:
+    if not SUWAYOMI_MARK_READ:
+        return {"status": "disabled"}
+
+    if not SUWAYOMI_URL:
+        app.logger.warning("suwayomi_mark_read is true but suwayomi_url is not configured")
+        return {"status": "error", "message": "suwayomi_url not configured"}
+
+    app.logger.info("Attempting to mark chapter %s of '%s' as read on Suwayomi (%s)", chapter, manga_name, SUWAYOMI_URL)
+
+    try:
+        # 1. Ricerca del manga per titolo esatto
+        find_manga_query = """
+        query FindManga($title: String!) {
+          mangas(filter: { title: { equalTo: $title } }) {
+            nodes {
+              id
+              title
+            }
+          }
+        }
+        """
+        data = _execute_suwayomi_graphql(find_manga_query, {"title": manga_name})
+        manga_nodes = (data.get("mangas") or {}).get("nodes") or []
+
+        if not manga_nodes:
+            # Fallback ricerca case-insensitive
+            find_manga_like = """
+            query FindMangaLike($title: String!) {
+              mangas(filter: { title: { includesInsensitive: $title } }) {
+                nodes {
+                  id
+                  title
+                }
+              }
+            }
+            """
+            data = _execute_suwayomi_graphql(find_manga_like, {"title": manga_name})
+            manga_nodes = (data.get("mangas") or {}).get("nodes") or []
+
+        if not manga_nodes:
+            app.logger.warning("Manga '%s' not found on Suwayomi", manga_name)
+            return {"status": "not_found", "message": f"manga '{manga_name}' not found on Suwayomi"}
+
+        target_manga = manga_nodes[0]
+        for node in manga_nodes:
+            if node.get("title", "").strip().lower() == manga_name.strip().lower():
+                target_manga = node
+                break
+
+        manga_id = target_manga["id"]
+        app.logger.debug("Found manga on Suwayomi: id=%s title='%s'", manga_id, target_manga.get("title"))
+
+        # 2. Ricerca del capitolo
+        target_chapter = None
+        chapter_num = None
+        try:
+            chapter_num = float(chapter)
+        except (ValueError, TypeError):
+            pass
+
+        if chapter_num is not None:
+            find_chapter_query = """
+            query FindChapterByNum($mangaId: Int!, $chapterNum: Float!) {
+              chapters(
+                condition: { mangaId: $mangaId }
+                filter: { chapterNumber: { equalTo: $chapterNum } }
+              ) {
+                nodes {
+                  id
+                  name
+                  chapterNumber
+                  isRead
+                }
+              }
+            }
+            """
+            try:
+                ch_data = _execute_suwayomi_graphql(find_chapter_query, {"mangaId": manga_id, "chapterNum": chapter_num})
+                ch_nodes = (ch_data.get("chapters") or {}).get("nodes") or []
+                if ch_nodes:
+                    target_chapter = ch_nodes[0]
+            except Exception as exc:
+                app.logger.debug("Direct chapter number query failed, will fallback to list: %s", exc)
+
+        if not target_chapter:
+            all_chapters_query = """
+            query AllChapters($mangaId: Int!) {
+              chapters(condition: { mangaId: $mangaId }) {
+                nodes {
+                  id
+                  name
+                  chapterNumber
+                  isRead
+                }
+              }
+            }
+            """
+            ch_data = _execute_suwayomi_graphql(all_chapters_query, {"mangaId": manga_id})
+            ch_nodes = (ch_data.get("chapters") or {}).get("nodes") or []
+
+            if chapter_num is not None:
+                for node in ch_nodes:
+                    num = node.get("chapterNumber")
+                    if num is not None and abs(float(num) - chapter_num) < 0.001:
+                        target_chapter = node
+                        break
+
+            if not target_chapter:
+                for node in ch_nodes:
+                    node_name = node.get("name", "")
+                    if extract_special_chapter_label(node_name) == chapter:
+                        target_chapter = node
+                        break
+                    if normalize_chapter_number(node_name) == chapter:
+                        target_chapter = node
+                        break
+                    if chapter.lower() in node_name.lower():
+                        target_chapter = node
+                        break
+
+        if not target_chapter:
+            app.logger.warning("Chapter %s of '%s' not found on Suwayomi", chapter, manga_name)
+            return {"status": "not_found", "message": f"chapter {chapter} not found on Suwayomi"}
+
+        chapter_id = target_chapter["id"]
+        chapter_name = target_chapter.get("name", str(chapter))
+
+        # 3. Controllo se e' gia' letto
+        if target_chapter.get("isRead") is True:
+            app.logger.info("Chapter '%s' (id=%s) of '%s' is already marked as read on Suwayomi", chapter_name, chapter_id, manga_name)
+            return {"status": "already_read", "chapter_id": chapter_id, "name": chapter_name}
+
+        # 4. Mutation per segnarlo letto
+        mark_read_mutation = """
+        mutation MarkChapterRead($id: Int!) {
+          updateChapter(input: { id: $id, patch: { isRead: true } }) {
+            chapter {
+              id
+              isRead
+            }
+          }
+        }
+        """
+        _execute_suwayomi_graphql(mark_read_mutation, {"id": chapter_id})
+        app.logger.info("Successfully marked chapter '%s' (id=%s) of '%s' as read on Suwayomi", chapter_name, chapter_id, manga_name)
+
+        return {
+            "status": "marked_read",
+            "chapter_id": chapter_id,
+            "chapter_name": chapter_name,
+            "manga_id": manga_id,
+            "manga_title": target_manga.get("title")
+        }
+
+    except Exception as exc:
+        app.logger.warning("Error communicating with Suwayomi to mark chapter as read: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
 def is_probably_temporary_file(path: Path) -> bool:
     temp_suffixes = {
         ".tmp", ".part", ".partial", ".crdownload", ".download", ".!qB", ".filepart"
@@ -1029,6 +1255,10 @@ def process_file(input_path: Path):
                     pass
         cleanup_kcc_temp()
 
+    suwayomi_result = None
+    if SUWAYOMI_MARK_READ and remote_paths:
+        suwayomi_result = mark_chapter_as_read_on_suwayomi(manga_name, chapter, source_name)
+
     return {
         "input_file": str(input_path),
         "stable_size": stable_size,
@@ -1049,6 +1279,7 @@ def process_file(input_path: Path):
         "format": FORMAT,
         "upscale": UPSCALE,
         "stretch": STRETCH,
+        "suwayomi": suwayomi_result,
     }
 
 
@@ -1353,6 +1584,8 @@ def health():
         "jobs": queue_counts,
         "worker_alive": worker_thread.is_alive(),
         "log_level": LOG_LEVEL_NAME,
+        "suwayomi_mark_read": SUWAYOMI_MARK_READ,
+        "suwayomi_configured": bool(SUWAYOMI_URL),
     }
     return jsonify(status)
 
