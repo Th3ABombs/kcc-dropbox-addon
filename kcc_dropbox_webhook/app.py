@@ -12,7 +12,7 @@ import zipfile
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import dropbox
 import requests
@@ -352,13 +352,19 @@ def extract_source_name(file_path: Path) -> Optional[str]:
     # direttamente sotto watch_root.
     try:
         relative = file_path.resolve().relative_to(Path(WATCH_ROOT).resolve())
-    except ValueError:
-        return None
+        if len(relative.parts) >= 3:
+            return relative.parts[-3]
+    except (ValueError, RuntimeError):
+        pass
 
-    if len(relative.parts) < 3:
-        return None
+    try:
+        parents = file_path.resolve().parents
+        if len(parents) >= 2 and parents[1].name.lower() not in ("mangas", "downloads", "share", ""):
+            return parents[1].name
+    except Exception:
+        pass
 
-    return relative.parts[-3]
+    return None
 
 
 def get_series_metadata(manga_name: str, chapter: str, source_suffix: str = ""):
@@ -546,13 +552,14 @@ def build_output_title(input_path: Path):
 
     # Con piu' fonti per lo stesso manga i nomi coinciderebbero e l'upload
     # successivo sovrascriverebbe il precedente: la fonte li tiene separati.
-    source_name = extract_source_name(input_path) if SOURCE_IN_TITLE else None
+    detected_source = extract_source_name(input_path)
+    source_name = detected_source if SOURCE_IN_TITLE else None
     safe_source = sanitize_filename(source_name) if source_name else ""
     source_suffix = f" [{safe_source}]" if safe_source else ""
 
     title = f"{safe_manga} {safe_chapter}{source_suffix}"
 
-    return title, manga_name, chapter, source_name, source_suffix
+    return title, manga_name, chapter, source_name, source_suffix, detected_source
 
 
 def remote_matches_title(remote_filename: str, title: str) -> bool:
@@ -812,37 +819,16 @@ def extract_chapter_from_string(text: str) -> Optional[str]:
     return None
 
 
-def _find_suwayomi_chapter_direct(manga_id: int, chapter: str) -> Optional[dict]:
-    chapter_num = None
-    try:
-        chapter_num = float(chapter)
-    except (ValueError, TypeError):
-        pass
-
-    if chapter_num is not None:
-        try:
-            # Ricerca diretta per chapterNumber esatto
-            query = """
-            query FindChapterByNum($mangaId: Int!, $chapterNum: Float!) {
-              chapters(condition: { mangaId: $mangaId, chapterNumber: $chapterNum }) {
-                nodes {
-                  id
-                  name
-                  chapterNumber
-                  isRead
-                }
-              }
-            }
-            """
-            data = _execute_suwayomi_graphql(query, {"mangaId": manga_id, "chapterNum": chapter_num})
-            nodes = (data.get("chapters") or {}).get("nodes") or []
-            if nodes:
-                app.logger.debug("Found chapter %s for manga %d directly via condition.chapterNumber", chapter, manga_id)
-                return nodes[0]
-        except Exception as exc:
-            app.logger.debug("Direct chapter condition query failed: %s", exc)
-
-    return None
+def _match_source(candidate_source: Optional[dict], source_name: Optional[str]) -> bool:
+    if not source_name or not candidate_source:
+        return False
+    clean_src = re.sub(r"[^a-zA-Z0-9]+", "", source_name).lower()
+    for key in ("displayName", "name", "id"):
+        val = str(candidate_source.get(key) or "")
+        clean_val = re.sub(r"[^a-zA-Z0-9]+", "", val).lower()
+        if clean_src and clean_val and (clean_src in clean_val or clean_val in clean_src):
+            return True
+    return False
 
 
 def _get_suwayomi_chapters(manga_id: int) -> list:
@@ -912,7 +898,7 @@ def _get_suwayomi_chapters(manga_id: int) -> list:
     try:
         all_nodes = []
         after = None
-        for _ in range(25):  # fino a centinaia/migliaia di capitoli
+        for _ in range(25):  # fino a diverse centinaia/migliaia di capitoli
             query = """
             query ChaptersPage($mangaId: Int!, $after: String) {
               chapters(condition: { mangaId: $mangaId }, after: $after) {
@@ -948,55 +934,67 @@ def _get_suwayomi_chapters(manga_id: int) -> list:
     return []
 
 
-def _match_chapter_in_nodes(nodes: list, chapter: str) -> Optional[dict]:
+def _match_best_chapter_in_nodes(
+    nodes: list, chapter: str, chapter_filename: Optional[str] = None
+) -> Tuple[Optional[dict], int]:
     chapter_num = None
     try:
         chapter_num = float(chapter)
     except (ValueError, TypeError):
         pass
 
-    # 1. Match numerico su chapterNumber (es. 138.0 vs 138)
-    if chapter_num is not None:
-        for node in nodes:
-            num = node.get("chapterNumber")
-            if num is not None:
-                try:
-                    if abs(float(num) - chapter_num) < 0.001:
-                        return node
-                except (ValueError, TypeError):
-                    pass
+    clean_fn = re.sub(r"[^a-zA-Z0-9]+", "", chapter_filename or "").lower()
+    fn_first_word = chapter_filename.strip().split()[0].lower() if chapter_filename and chapter_filename.strip() else ""
 
-    # 2. Match estraendo il numero o etichetta dal titolo del capitolo (es. "Capitolo 138" -> "138")
+    best_node = None
+    best_score = -1
+
     for node in nodes:
         node_name = node.get("name", "")
-        extracted = extract_chapter_from_string(node_name)
-        if extracted and extracted == chapter:
-            return node
+        clean_name = re.sub(r"[^a-zA-Z0-9]+", "", node_name).lower()
+        node_first_word = node_name.strip().split()[0].lower() if node_name and node_name.strip() else ""
 
-    # 3. Match su etichetta speciale ("Extra 3", "Oneshot")
-    for node in nodes:
-        node_name = node.get("name", "")
-        if extract_special_chapter_label(node_name) == chapter:
-            return node
-
-    # 4. Match con regex word boundary e delimitatori sul nome (es. " 138 " o "138:" o "#138")
-    re_patterns = [
-        re.compile(rf"\b{re.escape(chapter)}\b", re.IGNORECASE),
-        re.compile(rf"(?:^|[\s#._:-]){re.escape(chapter)}(?:$|[\s#._:-])", re.IGNORECASE),
-    ]
-    for pattern in re_patterns:
-        for node in nodes:
-            node_name = node.get("name", "")
-            if pattern.search(node_name):
-                return node
-
-    # 5. Match su chapterNumber come stringa normalizzata
-    for node in nodes:
+        # 1. Verifica se il capitolo numerico coincide
         num = node.get("chapterNumber")
-        if num is not None and normalize_chapter_number(str(num)) == chapter:
-            return node
+        num_matches = False
+        if chapter_num is not None and num is not None:
+            try:
+                num_matches = abs(float(num) - chapter_num) < 0.001
+            except (ValueError, TypeError):
+                pass
 
-    return None
+        extracted = extract_chapter_from_string(node_name)
+        if not num_matches and extracted and extracted == chapter:
+            num_matches = True
+
+        if not num_matches:
+            if re.search(rf"\b{re.escape(chapter)}\b", node_name):
+                num_matches = True
+
+        if not num_matches:
+            if num is not None and normalize_chapter_number(str(num)) == chapter:
+                num_matches = True
+
+        if not num_matches:
+            continue
+
+        # Calcola score di aderenza
+        score = 20  # Base: numero capitolo coincidente
+
+        if clean_fn and clean_name:
+            if clean_fn == clean_name:
+                score += 50  # Match esatto del nome del file (es. 'capitolo275' == 'capitolo275')
+            elif clean_fn in clean_name or clean_name in clean_fn:
+                score += 30  # Sottostringa
+
+        if fn_first_word and node_first_word and fn_first_word == node_first_word:
+            score += 20  # Stesso prefisso linguistico (es. 'capitolo' vs 'capitolo')
+
+        if score > best_score:
+            best_score = score
+            best_node = node
+
+    return best_node, best_score
 
 
 def _mark_chapter_read_graphql(chapter_id: int):
@@ -1058,7 +1056,12 @@ def _mark_chapter_read_graphql(chapter_id: int):
     return _execute_suwayomi_graphql(mutation4, {"id": str(chapter_id)})
 
 
-def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name: Optional[str] = None) -> dict:
+def mark_chapter_as_read_on_suwayomi(
+    manga_name: str,
+    chapter: str,
+    source_name: Optional[str] = None,
+    chapter_filename: Optional[str] = None
+) -> dict:
     if not SUWAYOMI_MARK_READ:
         return {"status": "disabled"}
 
@@ -1066,13 +1069,16 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
         app.logger.warning("suwayomi_mark_read is true but suwayomi_url is not configured")
         return {"status": "error", "message": "suwayomi_url not configured"}
 
-    app.logger.info("Attempting to mark chapter %s of '%s' as read on Suwayomi (%s)", chapter, manga_name, SUWAYOMI_URL)
+    app.logger.info(
+        "Attempting to mark chapter %s of '%s' as read on Suwayomi (%s) [source: %s, file: %s]",
+        chapter, manga_name, SUWAYOMI_URL, source_name or "unknown", chapter_filename or "unknown"
+    )
 
     try:
-        # 1. Ricerca del manga
+        # 1. Ricerca del manga con query che includono anche l'oggetto source
         manga_nodes = []
 
-        # 1a. Prova query con condition { title: $title } (Suwayomi standard)
+        # 1a. Prova query con condition { title: $title } e blocco source
         try:
             find_manga_cond = """
             query FindMangaCond($title: String!) {
@@ -1080,6 +1086,11 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                 nodes {
                   id
                   title
+                  source {
+                    id
+                    name
+                    displayName
+                  }
                 }
               }
             }
@@ -1087,7 +1098,7 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
             data = _execute_suwayomi_graphql(find_manga_cond, {"title": manga_name})
             manga_nodes = (data.get("mangas") or {}).get("nodes") or []
         except Exception as exc:
-            app.logger.debug("Condition title query failed: %s", exc)
+            app.logger.debug("Condition title query with source failed: %s", exc)
 
         # 1b. Prova query con filter { title: { equalTo: $title } }
         if not manga_nodes:
@@ -1098,6 +1109,11 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                     nodes {
                       id
                       title
+                      source {
+                        id
+                        name
+                        displayName
+                      }
                     }
                   }
                 }
@@ -1105,7 +1121,7 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                 data = _execute_suwayomi_graphql(find_manga_query, {"title": manga_name})
                 manga_nodes = (data.get("mangas") or {}).get("nodes") or []
             except Exception as exc:
-                app.logger.debug("Filter equalTo query failed: %s", exc)
+                app.logger.debug("Filter equalTo query with source failed: %s", exc)
 
         # 1c. Prova query con filter { title: { includesInsensitive: $title } }
         if not manga_nodes:
@@ -1116,6 +1132,11 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                     nodes {
                       id
                       title
+                      source {
+                        id
+                        name
+                        displayName
+                      }
                     }
                   }
                 }
@@ -1123,7 +1144,7 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                 data = _execute_suwayomi_graphql(find_manga_like, {"title": manga_name})
                 manga_nodes = (data.get("mangas") or {}).get("nodes") or []
             except Exception as exc:
-                app.logger.debug("Title substring filter failed: %s", exc)
+                app.logger.debug("Title substring filter with source failed: %s", exc)
 
         # 1d. Cerca tra i manga della libreria (condition: { inLibrary: true }) o elenco generale
         if not manga_nodes:
@@ -1135,6 +1156,11 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                     nodes {
                       id
                       title
+                      source {
+                        id
+                        name
+                        displayName
+                      }
                     }
                   }
                 }
@@ -1152,6 +1178,11 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                         nodes {
                           id
                           title
+                          source {
+                            id
+                            name
+                            displayName
+                          }
                         }
                       }
                     }
@@ -1168,6 +1199,24 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
                 if clean_target and (clean_target == clean_title or clean_target in clean_title or clean_title in clean_target):
                     manga_nodes.append(node)
 
+        # Fallback semplice senza blocco source se le query precedenti hanno fallito per incompatibilita' di schema
+        if not manga_nodes:
+            try:
+                find_manga_simple = """
+                query FindMangaSimple($title: String!) {
+                  mangas(condition: { title: $title }) {
+                    nodes {
+                      id
+                      title
+                    }
+                  }
+                }
+                """
+                data = _execute_suwayomi_graphql(find_manga_simple, {"title": manga_name})
+                manga_nodes = (data.get("mangas") or {}).get("nodes") or []
+            except Exception as exc:
+                app.logger.debug("FindMangaSimple query failed: %s", exc)
+
         # Deduplica i nodi trovati per id
         seen_ids = set()
         unique_nodes = []
@@ -1182,13 +1231,39 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
             app.logger.warning("Manga '%s' not found on Suwayomi", manga_name)
             return {"status": "not_found", "message": f"manga '{manga_name}' not found on Suwayomi"}
 
+        # Per i candidati senza source, prova a recuperare la source singolarmente
+        for cand in manga_nodes:
+            if not cand.get("source"):
+                cand_id = cand.get("id")
+                if cand_id:
+                    try:
+                        cand_query = """
+                        query MangaSource($id: Int!) {
+                          manga(id: $id) {
+                            source {
+                              id
+                              name
+                              displayName
+                            }
+                          }
+                        }
+                        """
+                        res_data = _execute_suwayomi_graphql(cand_query, {"id": int(cand_id)})
+                        cand_source = (res_data.get("manga") or {}).get("source")
+                        if cand_source:
+                            cand["source"] = cand_source
+                    except Exception:
+                        pass
+
         # Ordina per priorita':
-        # 1. Titolo esattamente coincidente
-        # 2. Titolo pulito coincidente (alphanumeric)
-        # 3. Lunghezza del titolo (preferisci titoli piu' brevi e precisi)
+        # 1. Se la source coincide con la cartella sorgente su disco (es. "Mangaworld (IT)")
+        # 2. Titolo esattamente coincidente
+        # 3. Titolo pulito coincidente (alphanumeric)
+        # 4. Lunghezza del titolo
         clean_target = re.sub(r"[^a-zA-Z0-9]+", "", manga_name).lower()
         manga_nodes.sort(
             key=lambda m: (
+                0 if _match_source(m.get("source"), source_name) else 1,
                 0 if m.get("title", "").strip().lower() == manga_name.strip().lower() else (
                     1 if re.sub(r"[^a-zA-Z0-9]+", "", m.get("title", "")).lower() == clean_target else 2
                 ),
@@ -1197,35 +1272,57 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
         )
 
         app.logger.info(
-            "Found %d candidate manga(s) for '%s' on Suwayomi: %s",
-            len(manga_nodes), manga_name, [(m.get("id"), m.get("title")) for m in manga_nodes]
+            "Found %d candidate manga(s) for '%s' on Suwayomi (source priority: '%s'): %s",
+            len(manga_nodes),
+            manga_name,
+            source_name or "none",
+            [
+                (
+                    m.get("id"),
+                    m.get("title"),
+                    (m.get("source") or {}).get("displayName") or (m.get("source") or {}).get("name") or "no_source"
+                )
+                for m in manga_nodes
+            ]
         )
 
-        # 2. Cerca il capitolo tra i manga candidati
+        # 2. Cerca il capitolo tra i manga candidati usando scoring intelligente
         target_manga = None
         target_chapter = None
+        best_overall_score = -1
 
         for candidate in manga_nodes:
             cand_id = candidate.get("id")
             if not cand_id:
                 continue
 
-            # 2a. Prova prima il lookup diretto rapido del capitolo per numero
-            direct_match = _find_suwayomi_chapter_direct(int(cand_id), chapter)
-            if direct_match:
-                target_manga = candidate
-                target_chapter = direct_match
-                break
-
-            # 2b. Altrimenti recupera i capitoli del manga e cerca con matching flessibile
             cand_chapters = _get_suwayomi_chapters(int(cand_id))
-            match = _match_chapter_in_nodes(cand_chapters, chapter)
-            if match:
-                target_manga = candidate
-                target_chapter = match
-                break
+            if not cand_chapters:
+                continue
 
-        if not target_chapter:
+            matched_chapter, score = _match_best_chapter_in_nodes(cand_chapters, chapter, chapter_filename)
+            if matched_chapter:
+                is_src_match = _match_source(candidate.get("source"), source_name)
+                if is_src_match:
+                    score += 100
+
+                cand_src_label = (candidate.get("source") or {}).get("displayName") or (candidate.get("source") or {}).get("name") or "unknown"
+                app.logger.debug(
+                    "Candidate manga id=%s (%s, source=%s) matched chapter '%s' (score=%d)",
+                    cand_id, candidate.get("title"), cand_src_label, matched_chapter.get("name"), score
+                )
+
+                if score > best_overall_score:
+                    best_overall_score = score
+                    target_manga = candidate
+                    target_chapter = matched_chapter
+
+                # Se abbiamo trovato sia la source coincidente che il capitolo (score >= 150),
+                # abbiamo il candidato perfetto e possiamo terminare il ciclo.
+                if is_src_match and score >= 150:
+                    break
+
+        if not target_chapter or not target_manga:
             app.logger.warning(
                 "Chapter %s of '%s' not found on Suwayomi (searched in %d candidate manga(s): %s)",
                 chapter, manga_name, len(manga_nodes), [(m.get("id"), m.get("title")) for m in manga_nodes]
@@ -1234,6 +1331,9 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
 
         chapter_id = target_chapter["id"]
         chapter_name = target_chapter.get("name", str(chapter))
+        manga_title = target_manga.get("title")
+        manga_source = (target_manga.get("source") or {}).get("displayName") or (target_manga.get("source") or {}).get("name") or ""
+        manga_desc = f"{manga_title} [{manga_source}]" if manga_source else manga_title
 
         # 3. Controllo se e' gia' letto
         is_read = bool(
@@ -1242,14 +1342,14 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
             or ((target_chapter.get("user") or {}).get("isRead"))
         )
         if is_read:
-            app.logger.info("Chapter '%s' (id=%s) of '%s' is already marked as read on Suwayomi", chapter_name, chapter_id, target_manga.get("title"))
+            app.logger.info("Chapter '%s' (id=%s) of '%s' (id=%s) is already marked as read on Suwayomi", chapter_name, chapter_id, manga_desc, target_manga.get("id"))
             return {"status": "already_read", "chapter_id": chapter_id, "name": chapter_name}
 
         # 4. Mutation per segnarlo letto
         _mark_chapter_read_graphql(chapter_id)
         app.logger.info(
             "Successfully marked chapter '%s' (id=%s) of '%s' (id=%s) as read on Suwayomi",
-            chapter_name, chapter_id, target_manga.get("title"), target_manga.get("id")
+            chapter_name, chapter_id, manga_desc, target_manga.get("id")
         )
 
         return {
@@ -1257,7 +1357,8 @@ def mark_chapter_as_read_on_suwayomi(manga_name: str, chapter: str, source_name:
             "chapter_id": chapter_id,
             "chapter_name": chapter_name,
             "manga_id": target_manga.get("id"),
-            "manga_title": target_manga.get("title")
+            "manga_title": manga_title,
+            "source": manga_source
         }
 
     except Exception as exc:
@@ -1469,7 +1570,7 @@ def process_file(input_path: Path):
         interval=FILE_STABLE_INTERVAL
     )
 
-    title, manga_name, chapter, source_name, source_suffix = build_output_title(input_path)
+    title, manga_name, chapter, source_name, source_suffix, detected_source = build_output_title(input_path)
 
     output_path = Path(OUTPUT_DIR)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1579,7 +1680,12 @@ def process_file(input_path: Path):
 
     suwayomi_result = None
     if SUWAYOMI_MARK_READ and remote_paths:
-        suwayomi_result = mark_chapter_as_read_on_suwayomi(manga_name, chapter, source_name)
+        suwayomi_result = mark_chapter_as_read_on_suwayomi(
+            manga_name=manga_name,
+            chapter=chapter,
+            source_name=detected_source,
+            chapter_filename=input_path.stem
+        )
 
     return {
         "input_file": str(input_path),
@@ -1649,7 +1755,7 @@ def reconcile(dry_run: bool = False, force: bool = False) -> dict:
         claimed = set()
 
         for input_path in local_files:
-            title, _, _, _, _ = build_output_title(input_path)
+            title, *_ = build_output_title(input_path)
             matches = [name for name in remote_files if remote_matches_title(name, title)]
 
             if not matches:

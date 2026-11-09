@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.7.3
+- Fixed multi-source manga disambiguation on Suwayomi:
+  - Source-aware candidate prioritization: automatically detects the source directory (e.g. `Mangaworld (IT)`) from the downloaded file path and prioritizes the exact matching Suwayomi manga over other same-titled series from different sources/languages (e.g. English MangaDex).
+  - Language and chapter filename scoring: compares the local file stem (e.g. `Capitolo 275`) with remote chapter titles to select the true matching language edition.
+  - Removed faulty `condition: { chapterNumber }` query that caused a Kotlin `ClassCastException: Cannot cast java.lang.Double to java.lang.Float` in Suwayomi-Server.
+  - Source detection now always passes to Suwayomi mark-as-read regardless of `source_in_title` setting.
+
 ## 2.7.2
 - Fixed chapter and manga matching on Suwayomi:
   - Added direct fast chapter lookup using `condition: { mangaId, chapterNumber }`.
