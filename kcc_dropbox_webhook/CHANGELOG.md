@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.7.2
+- Fixed chapter and manga matching on Suwayomi:
+  - Added direct fast chapter lookup using `condition: { mangaId, chapterNumber }`.
+  - Fixed GraphQL validation error on `manga.chapters`: removed invalid argument `(first: 10000)` on `MangaType.chapters` which caused queries to fail on standard Suwayomi servers.
+  - Added `condition: { title }` and library search fallback (`condition: { inLibrary: true }`) for manga discovery.
+  - Enhanced chapter matching to handle `#138`, `Ch. 138`, chapter number prefixes, and string representations.
+  - Added direct mutation input shape fallback (`id`, `isRead`).
+
 ## 2.7.1
 - Fixed Suwayomi chapter lookup for manga with many chapters (e.g. Bleach, One Piece):
   - Added native REST API `/api/v1/manga/{id}/chapters` retrieval to bypass GraphQL connection page limits.
